@@ -95,6 +95,34 @@ See **[SETUP.md](./SETUP.md)** for detailed customization instructions.
 
 ---
 
+## 🚀 NEW: Modh Fundamentals
+
+**My system for growing and scaling engineering teams.**
+
+Four battle-tested operational systems I install at every SaaS company:
+
+| System | Problem It Solves | Outcome |
+|--------|-------------------|---------|
+| **[Project Scoping](./fundamentals/project-scoping.md)** | Projects take 3+ months, scope creeps | 90% of projects <3 weeks, velocity 3x |
+| **[Decision Velocity](./fundamentals/decision-velocity.md)** | Teams debate everything, analysis paralysis | 90% decisions same-day, 5x shipping |
+| **[Engineering Values](./fundamentals/engineering-values.md)** | Culture is vague, no operational clarity | Clear values that translate to daily behavior |
+| **[Backlog Hygiene](./fundamentals/backlog-hygiene.md)** | 500+ ticket backlogs, decision paralysis | Clean <50 ticket backlogs in 1–2 weeks |
+
+**Content Strategy Included:** Turn these systems into LinkedIn posts, Instagram carousels, and Reels. See [`fundamentals/content-strategy.md`](./fundamentals/content-strategy.md).
+
+**Quick Start:** [`fundamentals/QUICK-START.md`](./fundamentals/QUICK-START.md) — 5-day plan to ship your first content.
+
+**Ready-to-Post:** [`fundamentals/WEEK-1-CONTENT.md`](./fundamentals/WEEK-1-CONTENT.md) — Copy-paste content for Week 1.
+
+**Use Cases:**
+- **Consulting/Advisory:** Diagnose organizational dysfunction, install the right system
+- **Personal Brand:** Position yourself as a tech enabler and systems expert
+- **Your Company:** Install at your own company, measure before/after impact
+
+**Read:** [`fundamentals/README.md`](./fundamentals/README.md) for full overview.
+
+---
+
 ## Skills Overview
 
 ### Core Architecture
