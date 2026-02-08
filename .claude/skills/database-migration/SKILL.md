@@ -1,0 +1,280 @@
+---
+name: database-migration
+description: Guide schema-first database workflow for your application. Use when discussing schema changes, creating tables, modifying columns, running migrations, RLS policies, Supabase schema, or database types. Enforces domain.sql updates, diff-based migrations, and type generation.
+allowed-tools: Read, Grep, Glob, Bash
+---
+
+# Database Migration Skill
+
+## When This Skill Activates
+
+This skill automatically activates when you:
+- Discuss database schema changes
+- Create or modify tables
+- Add or change columns
+- Work with RLS policies
+- Run migration commands
+
+## Core Workflow (SCHEMA-FIRST)
+
+**NEVER manually write migration files.** Always follow this workflow:
+
+```
+1. Update domain.sql  →  2. Run db diff  →  3. Review migration  →  4. Apply  →  5. Generate types
+```
+
+### Step 1: Update Domain SQL Files
+
+Schema definitions live in `supabase/schemas/`. Find the relevant domain:
+
+```bash
+ls supabase/schemas/
+# booking.sql, calls.sql, leads.sql, organizations.sql, payments.sql, users.sql
+```
+
+Edit the appropriate domain file:
+
+```sql
+-- supabase/schemas/calls.sql
+-- Add new column to existing table
+ALTER TABLE calls ADD COLUMN cancellation_reason text;
+
+-- Or create new table with RLS
+CREATE TABLE call_feedback (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id text NOT NULL,
+  call_id uuid REFERENCES calls(id) ON DELETE CASCADE,
+  rating integer CHECK (rating >= 1 AND rating <= 5),
+  comments text,
+  created_at timestamptz DEFAULT now()
+);
+
+-- Enable RLS
+ALTER TABLE call_feedback ENABLE ROW LEVEL SECURITY;
+
+-- Standard org isolation policy
+CREATE POLICY "org_isolation" ON call_feedback
+  FOR ALL USING (organization_id = (auth.jwt() ->> 'org_id')::text);
+```
+
+### Step 2: Generate Migration from Diff
+
+**NEVER write migration SQL manually.** Use the diff command:
+
+```bash
+bun run supabase db diff -f <migration_name> --linked
+```
+
+Example:
+```bash
+bun run supabase db diff -f add_call_feedback_table --linked
+```
+
+This creates a migration file in `supabase/migrations/TIMESTAMP_add_call_feedback_table.sql`.
+
+### Step 3: Review the Generated Migration
+
+Always review before applying:
+
+```bash
+cat supabase/migrations/*_add_call_feedback_table.sql
+```
+
+Check for:
+- Correct table/column definitions
+- RLS policies included
+- No unintended changes
+- Safe migration patterns
+
+### Step 4: Apply Migration
+
+```bash
+bun run supabase db push --linked
+```
+
+### Step 5: Generate TypeScript Types
+
+**ALWAYS regenerate types** after schema changes:
+
+```bash
+bun db:types
+```
+
+This updates `app/_shared/lib/supabase/database.types.ts`.
+
+## RLS Policy Patterns
+
+### Standard Organization Isolation
+
+```sql
+-- Every table MUST have organization_id and RLS
+ALTER TABLE my_table ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "org_isolation" ON my_table
+  FOR ALL USING (organization_id = (auth.jwt() ->> 'org_id')::text);
+```
+
+### Admin-Only Operations
+
+```sql
+-- Only org admins can perform certain actions
+CREATE POLICY "admin_only_delete" ON sensitive_table
+  FOR DELETE USING (
+    organization_id = (auth.jwt() ->> 'org_id')::text
+    AND (auth.jwt() ->> 'org_role') = 'org:admin'
+  );
+```
+
+### Public Read, Org Write
+
+```sql
+-- Anyone can read, only org members can write
+CREATE POLICY "public_read" ON public_content
+  FOR SELECT USING (true);
+
+CREATE POLICY "org_write" ON public_content
+  FOR INSERT USING (organization_id = (auth.jwt() ->> 'org_id')::text);
+```
+
+## Safe Migration Patterns
+
+### Adding Columns
+
+```sql
+-- ✅ SAFE: Add nullable column (no downtime)
+ALTER TABLE users ADD COLUMN avatar_url text;
+
+-- ✅ SAFE: Add column with default (no downtime in PostgreSQL)
+ALTER TABLE users ADD COLUMN is_active boolean DEFAULT true;
+
+-- ⚠️ REQUIRES BACKFILL: Add NOT NULL without default
+-- Step 1: Add nullable
+ALTER TABLE users ADD COLUMN timezone text;
+-- Step 2: Backfill
+UPDATE users SET timezone = 'America/New_York' WHERE timezone IS NULL;
+-- Step 3: Add constraint
+ALTER TABLE users ALTER COLUMN timezone SET NOT NULL;
+```
+
+### Renaming (Multi-Step)
+
+```sql
+-- ❌ DANGEROUS: Direct rename breaks production
+ALTER TABLE users RENAME COLUMN name TO full_name;
+
+-- ✅ SAFE: Multi-step rename
+-- Migration 1: Add new column
+ALTER TABLE users ADD COLUMN full_name text;
+-- Migration 2: Backfill + update code to use both
+UPDATE users SET full_name = name WHERE full_name IS NULL;
+-- Migration 3: After code deployed, drop old column
+ALTER TABLE users DROP COLUMN name;
+```
+
+### Dropping Columns
+
+```sql
+-- ⚠️ CAREFUL: Ensure no code references this column
+-- Step 1: Remove all code references
+-- Step 2: Deploy code changes
+-- Step 3: Drop column
+ALTER TABLE users DROP COLUMN deprecated_field;
+```
+
+## Common Commands
+
+```bash
+# Generate migration from schema changes
+bun run supabase db diff -f <name> --linked
+
+# Apply migrations to remote
+bun run supabase db push --linked
+
+# Generate TypeScript types
+bun db:types
+
+# Reset local database (destructive!)
+bun db:reset
+
+# Open database GUI
+bun db:studio
+
+# Pull remote schema to local
+supabase db pull
+```
+
+## Domain SQL File Structure
+
+```sql
+-- supabase/schemas/domain.sql
+
+-- ============================================================================
+-- TABLE: entity_name
+-- ============================================================================
+
+CREATE TABLE entity_name (
+  -- Primary key
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- Multi-tenancy (REQUIRED)
+  organization_id text NOT NULL,
+
+  -- Core fields
+  title text NOT NULL,
+  description text,
+  status text DEFAULT 'active',
+
+  -- Timestamps
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+-- Indexes
+CREATE INDEX idx_entity_org ON entity_name(organization_id);
+CREATE INDEX idx_entity_status ON entity_name(status);
+
+-- RLS
+ALTER TABLE entity_name ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "org_isolation" ON entity_name
+  FOR ALL USING (organization_id = (auth.jwt() ->> 'org_id')::text);
+
+-- Trigger for updated_at
+CREATE TRIGGER set_updated_at
+  BEFORE UPDATE ON entity_name
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+```
+
+## Reference Files
+
+- Domain schemas: `supabase/schemas/*.sql`
+- Generated types: `app/_shared/lib/supabase/database.types.ts`
+- Migration files: `supabase/migrations/*.sql`
+- Workflow guide: `docs/guides/DECLARATIVE_SCHEMA_WORKFLOW.md`
+
+## Common Mistakes to Avoid
+
+1. **Writing migrations manually** - Always use `db diff`
+2. **Forgetting RLS policies** - Every table needs org isolation
+3. **Direct renames** - Use multi-step migrations
+4. **Skipping type generation** - Always run `bun db:types`
+5. **Editing migration files** - They're generated, edit domain.sql instead
+6. **Missing organization_id** - Required for multi-tenancy
+
+## Quick Reference
+
+| Task | Command |
+|------|---------|
+| Create migration | `bun run supabase db diff -f <name> --linked` |
+| Apply migration | `bun run supabase db push --linked` |
+| Generate types | `bun db:types` |
+| Reset local DB | `bun db:reset` |
+| Open Studio | `bun db:studio` |
+
+| Pattern | Correct | Wrong |
+|---------|---------|-------|
+| Migration source | `supabase/schemas/*.sql` | Manual SQL files |
+| Generate | `db diff` | Write by hand |
+| Multi-tenancy | `organization_id` + RLS | No RLS |
+| After changes | `bun db:types` | (skip types) |

@@ -1,0 +1,67 @@
+---
+title: "Data Retention and Audit Logs"
+description: "| Data Type | Retention Period | Justification | Storage |"
+tags: ["security", "database"]
+category: "security"
+author: "Imran Gardezi"
+publishable: true
+---
+# Data Retention Policy
+
+## Retention Periods
+
+| Data Type | Retention Period | Justification | Storage |
+|-----------|-----------------|---------------|---------|
+| **Audit Logs** | 1 year minimum | SOC2 compliance (CC7.2, CC7.3) | `audit_logs` table (immutable) |
+| **Webhook Events** | 90 days | Debugging and idempotency dedup | `webhook_events` table |
+| **Call Recordings** | Per customer policy | Customer-controlled | Supabase Storage |
+| **Lead Data** | Until deleted by customer | Business data | `leads` table |
+| **Payment Records** | 7 years | Financial compliance | `payments` table |
+| **API Key Metadata** | Indefinite (revoked keys retained) | Audit trail | `api_keys` table |
+| **Session Data** | 30 days | Clerk-managed | Clerk infrastructure |
+
+## Audit Log Immutability
+
+Audit logs are designed to be immutable for compliance:
+
+- **No UPDATE policy:** RLS policies allow INSERT only (no UPDATE or DELETE for regular users)
+- **Service role writes:** Only the service role client can create audit log entries
+- **Field-level diffs:** Changes are stored as `{field: {old, new}}` for forensic analysis
+- **Actor tracking:** Every entry records who, what, when, where (IP), and how (source)
+
+### What is Logged
+
+- Entity lifecycle events (create, update, delete)
+- State changes (status transitions, assignments)
+- Credential lifecycle (API key create/revoke/delete)
+- Payment events (succeeded, failed, refunded)
+- Communication events (email sent, SMS sent)
+- System events (webhook processing, cron jobs)
+
+## Archival Strategy
+
+For data exceeding retention periods:
+
+1. **Export:** Periodically export old audit logs to cold storage (e.g., S3 with lifecycle policies)
+2. **Archive:** Move records to an archive table or external storage
+3. **Purge:** Delete from active database after confirmed archive
+4. **Verify:** Confirm archived data is accessible for compliance queries
+
+**Note:** Archival automation is not yet implemented. Current approach relies on the `audit_logs` table growing. Monitor table size and implement archival when approaching storage limits.
+
+## Customer Data Deletion
+
+When a customer requests data deletion:
+
+1. Soft-delete customer records (set `deleted_at` timestamp)
+2. Retain audit logs (anonymize PII fields if required)
+3. Remove PII from analytics and reporting
+4. Confirm deletion to customer within 30 days
+5. Purge soft-deleted records after 30-day grace period
+
+## AI Data Handling
+
+- Mastra AI agents process data in-memory only
+- AI prompts may contain entity names and metadata for context
+- Sentry AI tracing captures input/output for debugging (`recordInputs: true`)
+- **Recommendation:** Review Sentry data scrubbing rules to ensure customer PII is redacted from AI traces in production

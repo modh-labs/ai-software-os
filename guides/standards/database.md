@@ -1,0 +1,380 @@
+---
+title: "Database Standards"
+description: "Database conventions and standards for all apps in the monorepo."
+tags: ["database", "supabase", "typescript"]
+category: "standards"
+author: "Imran Gardezi"
+publishable: true
+---
+# Database Standards
+
+> **Applies to:** All apps in the monorepo (web, admin, future apps)
+> **Last Updated:** January 2026
+
+This document defines database standards for all applications in your monorepo. Every app MUST follow these patterns for consistent data access, type safety, and migration workflows.
+
+---
+
+## Repository Pattern
+
+### Philosophy
+
+ALL database operations go through repositories—one file per entity. This ensures type safety, consistent patterns, and centralized data access logic.
+
+### Critical Rules
+
+1. **ALL Supabase queries MUST go through repositories**
+2. **ALWAYS use Supabase-generated types**
+3. **NEVER use `supabase.from()` directly in Server Actions, Components, or API routes**
+4. **ALWAYS use `select *`** (see TypeScript Standards)
+
+---
+
+## Standard Repository Structure
+
+```typescript
+// app/_shared/repositories/calls.repository.ts
+import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Database } from '../lib/supabase/database.types';
+
+// Use generated types - no manual interfaces
+type Call = Database['public']['Tables']['calls']['Row'];
+type CallInsert = Database['public']['Tables']['calls']['Insert'];
+type CallUpdate = Database['public']['Tables']['calls']['Update'];
+
+/**
+ * List all calls with related data
+ * RLS policies automatically filter by organization_id
+ */
+export async function listCalls(
+  supabase: SupabaseClient<Database>,
+  filters?: { status?: string }
+): Promise<Call[]> {
+  let query = supabase
+    .from('calls')
+    .select(`
+      *,
+      lead:leads(*),
+      closer:users(*)
+    `)
+    .order('created_at', { ascending: false });
+
+  if (filters?.status) {
+    query = query.eq('status', filters.status);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Create a new call
+ * organization_id is automatically set by RLS
+ */
+export async function createCall(
+  supabase: SupabaseClient<Database>,
+  data: CallInsert
+): Promise<Call> {
+  const { data: call, error } = await supabase
+    .from('calls')
+    .insert(data)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return call;
+}
+
+/**
+ * Update an existing call
+ * RLS ensures user can only update calls in their org
+ */
+export async function updateCall(
+  supabase: SupabaseClient<Database>,
+  id: string,
+  updates: CallUpdate
+): Promise<Call> {
+  const { data: call, error } = await supabase
+    .from('calls')
+    .update(updates)
+    .eq('id', id)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return call;
+}
+```
+
+---
+
+## Key Principles
+
+| Principle | Implementation |
+|-----------|----------------|
+| Dependency Injection | Accept `SupabaseClient` as first parameter |
+| Generated Types | Use `Insert`, `Update`, `Row` from `database.types.ts` |
+| Full Selection | Always `select *` for type safety |
+| RLS Trust | Let RLS handle org filtering |
+| Tree-Shaking | Export individual functions, not objects |
+
+---
+
+## Usage from Server Actions
+
+```typescript
+// WRONG - Direct Supabase query in Server Action
+'use server'
+export async function createCall(data: CreateCallInput) {
+  const supabase = await createClient();
+  const { data: call, error } = await supabase
+    .from('calls')
+    .insert(data)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return call;
+}
+
+// RIGHT - Use repository
+'use server'
+import { createCall as createCallRepo } from '@/app/_shared/repositories/calls.repository';
+
+export async function createCallAction(data: CreateCallInput) {
+  const supabase = await createClient();
+  const call = await createCallRepo(supabase, data);
+  revalidatePath('/calls');
+  return { success: true, data: call };
+}
+```
+
+---
+
+## Type Generation
+
+### Workflow
+
+```bash
+# After schema changes, regenerate types
+pnpm db:types
+```
+
+This runs:
+```bash
+npx supabase gen types --lang=typescript --linked > packages/database-types/database.types.ts
+```
+
+### Type File Structure
+
+```typescript
+// packages/database-types/database.types.ts (generated)
+export type Database = {
+  public: {
+    Tables: {
+      calls: {
+        Row: { id: string; title: string; ... };
+        Insert: { id?: string; title: string; ... };
+        Update: { id?: string; title?: string; ... };
+      };
+      leads: { ... };
+    };
+  };
+};
+```
+
+---
+
+## Schema-First Workflow
+
+### NEVER Manually Create Migration Files
+
+Always use `supabase db diff`:
+
+```bash
+# 1. Modify schema in supabase/schemas/*.sql
+
+# 2. Generate migration from schema changes
+supabase db diff -f migration_name --linked
+
+# 3. Review the generated migration
+cat supabase/migrations/TIMESTAMP_migration_name.sql
+
+# 4. Apply the migration
+pnpm db:push
+
+# 5. Regenerate types
+pnpm db:types
+```
+
+### SQL Format Standards
+
+```sql
+-- CORRECT FORMAT
+CREATE TABLE IF NOT EXISTS "public"."users" (
+  "id" text NOT NULL PRIMARY KEY,
+  "name" text NOT NULL,
+  "created_at" timestamp with time zone NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS users_created_at_idx ON "public"."users" ("created_at");
+
+ALTER TABLE "public"."users" ENABLE ROW LEVEL SECURITY;
+```
+
+**Rules:**
+- UPPERCASE keywords (`CREATE TABLE`, `NOT NULL`)
+- Quote all identifiers (`"public"."table_name"`)
+- Use `IF NOT EXISTS` for idempotency
+- Always include schema prefix
+
+---
+
+## RLS Policy Patterns
+
+### Organization Isolation
+
+```sql
+ALTER TABLE "public"."calls" ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "organization_isolation" ON "public"."calls"
+FOR ALL USING (
+  organization_id = (auth.jwt() ->> 'org_id')::text
+);
+```
+
+### Role-Based Access
+
+```sql
+-- Admin full access
+CREATE POLICY "admin_full_access" ON "public"."sensitive_data"
+FOR ALL USING (
+  organization_id = (auth.jwt() ->> 'org_id')::text
+  AND (auth.jwt() ->> 'org_role') = 'org:admin'
+);
+
+-- Member read-only
+CREATE POLICY "member_read_only" ON "public"."sensitive_data"
+FOR SELECT USING (
+  organization_id = (auth.jwt() ->> 'org_id')::text
+);
+```
+
+---
+
+## Safe Migration Patterns
+
+### Adding Columns
+
+```sql
+-- Safe: Add nullable column
+ALTER TABLE "public"."users" ADD COLUMN "avatar_url" text;
+
+-- Safe: Add column with default
+ALTER TABLE "public"."users" ADD COLUMN "is_active" boolean DEFAULT true;
+```
+
+### Renaming Columns (Multi-Step)
+
+```sql
+-- DON'T: Direct rename breaks production
+ALTER TABLE "public"."users" RENAME COLUMN "name" TO "full_name";
+
+-- DO: Multi-step migration
+-- Step 1: Add new column
+ALTER TABLE "public"."users" ADD COLUMN "full_name" text;
+-- Step 2: Backfill + update code
+-- Step 3: Drop old column (after code deployed)
+```
+
+### Dropping Columns
+
+```sql
+-- Safe: Drop unused column (after verifying no code references)
+ALTER TABLE "public"."users" DROP COLUMN "legacy_field";
+```
+
+---
+
+## Commands Reference
+
+```bash
+# Open Supabase Studio (GUI)
+pnpm db:studio
+
+# Push migrations to remote database
+pnpm db:push
+
+# Reset database (destructive - local only)
+pnpm db:reset
+
+# Generate TypeScript types
+pnpm db:types
+
+# Create migration from schema diff
+supabase db diff -f migration_name --linked
+
+# Pull remote schema (after Studio changes)
+supabase db pull
+```
+
+---
+
+## Repository Directory
+
+```
+app/_shared/repositories/
+├── analytics.repository.ts     # Dashboard metrics
+├── calls.repository.ts         # Call CRUD
+├── leads.repository.ts         # Lead CRUD
+├── payments.repository.ts      # Payment records
+├── booking-links.repository.ts # Scheduler config
+├── users.repository.ts         # User data
+└── audit.repository.ts         # Audit logs
+```
+
+---
+
+## DO and DON'T
+
+### DO
+
+- Use schema-first workflow with `supabase db diff`
+- Generate migrations automatically
+- Test locally with `pnpm db:reset` before deploying
+- Regenerate TypeScript types after schema changes
+- Commit schema, migrations, and types together
+- Use zero-downtime patterns for breaking changes
+
+### DON'T
+
+- Write migrations manually
+- Push migrations without updating types
+- Use `supabase.from()` directly in Server Actions
+- Create custom interfaces for database types
+- Pick specific columns (`select('id, name')`)
+- Skip RLS policies on user data tables
+- Forget to test migrations locally first
+
+---
+
+## Checklist for New Tables
+
+- [ ] Create table in `supabase/schemas/` with proper SQL format
+- [ ] Generate migration with `supabase db diff`
+- [ ] Enable RLS: `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`
+- [ ] Add organization isolation policy
+- [ ] Regenerate types: `pnpm db:types`
+- [ ] Create repository file in `_shared/repositories/`
+- [ ] Export types in `_shared/types/`
+- [ ] Test locally with `pnpm db:reset`
+
+---
+
+## Related Documentation
+
+- [TypeScript Standards](./typescript.md) - Type conventions, `select *` rule
+- [Security Standards](./security.md) - RLS patterns
+- [Database Workflow Pattern](../patterns/database-workflow.md) - Detailed workflow
+- [Repository Pattern](../patterns/repository-pattern.md) - Implementation details

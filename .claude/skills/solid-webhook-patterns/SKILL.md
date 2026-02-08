@@ -1,0 +1,302 @@
+---
+name: solid-webhook-patterns
+description: Enforce SOLID principles in webhook architecture for maintainability and extensibility. Use when creating webhook routes, adding event handlers, building handler registries, or refactoring webhook code. Enforces registry pattern, single responsibility, and dependency injection.
+allowed-tools: Read, Grep, Glob, Edit, Write
+---
+
+# SOLID Webhook Patterns Skill
+
+## When This Skill Activates
+
+This skill automatically activates when you:
+- Create new webhook routes (`app/api/webhooks/**/route.ts`)
+- Add new webhook event handlers
+- Refactor webhook architecture
+- Discuss webhook extensibility or maintainability
+- Need to add a new event type to an existing webhook
+
+## Core Principles
+
+### Single Responsibility (SRP)
+- Route handler: HTTP concerns only (signature, routing, responses)
+- Event handlers: Business logic for ONE event type
+- Services: Shared logic (org lookup, side effects)
+
+### Open/Closed (OCP)
+- New handlers don't modify route.ts
+- Use handler registry for event routing
+- Extend by adding, not by modifying
+
+### Dependency Injection (DI)
+- Pass execution context to handlers
+- No hidden service creations in handlers
+- Testable, mockable dependencies
+
+## Core Rules (MUST Follow)
+
+### 1. Route Handler = HTTP Concerns ONLY
+
+Route handlers should ONLY handle:
+- Signature verification
+- Request parsing
+- Handler routing
+- HTTP responses
+
+```typescript
+// ❌ WRONG - Route doing business logic
+export async function POST(req: Request) {
+  const body = await req.json();
+
+  // ❌ Business logic in route
+  if (body.type === "booking.created") {
+    const supabase = await createServiceRoleClient();
+    const { data: bookingLink } = await supabase
+      .from("call_booking_links")
+      .select("*")
+      .eq("nylas_config_id", body.config_id)
+      .single();
+
+    // ... 200 lines of business logic ...
+  }
+}
+
+// ✅ CORRECT - Route only handles HTTP
+export async function POST(req: Request) {
+  // 1. Verify signature
+  const signature = req.headers.get("x-provider-signature");
+  if (!verifySignature(body, signature)) {
+    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  }
+
+  // 2. Parse and route to handler
+  const { eventType, payload } = parseWebhook(body);
+  const handler = WEBHOOK_HANDLERS[eventType];
+
+  if (!handler) {
+    return NextResponse.json({ success: true });  // ACK unknown events
+  }
+
+  // 3. Execute handler
+  const result = await handler.execute(payload, context);
+
+  // 4. Return HTTP response
+  return NextResponse.json({ success: true });
+}
+```
+
+### 2. Use Handler Registry Pattern (Open/Closed)
+
+**Adding new event types should NOT modify route.ts.** Use a registry:
+
+```typescript
+// lib/handler-registry.ts
+import type { z } from "zod";
+
+export interface WebhookHandler<T = unknown> {
+  /** Zod schema for payload validation */
+  schema: z.ZodSchema<T>;
+  /** Handler function */
+  execute: (payload: T, context: WebhookContext) => Promise<WebhookResult>;
+  /** Does this handler need organization context? */
+  requiresOrganization?: boolean;
+}
+
+export interface WebhookContext {
+  organizationId?: string;
+  supabase: SupabaseClient;
+  logger: WebhookLogger;
+}
+
+export interface WebhookResult {
+  success: boolean;
+  [key: string]: unknown;
+}
+
+// Register all handlers here - ONE place to add new events
+export const WEBHOOK_HANDLERS: Record<string, WebhookHandler> = {
+  "booking.created": {
+    schema: BookingCreatedSchema,
+    execute: handleBookingCreated,
+    requiresOrganization: true,
+  },
+  "booking.cancelled": {
+    schema: BookingCancelledSchema,
+    execute: handleBookingCancelled,
+    requiresOrganization: true,
+  },
+  "grant.created": {
+    schema: GrantEventSchema,
+    execute: handleGrantCreated,
+    requiresOrganization: false,
+  },
+  // Adding new handler = add entry here + create handler file
+  // NO changes to route.ts needed!
+};
+```
+
+**Benefits of Registry Pattern**:
+- ✅ Adding new handler = 1 file change (registry)
+- ✅ Validation schemas colocated with handlers
+- ✅ Route.ts stays small (~100-150 lines)
+- ✅ Easy to test handlers in isolation
+- ✅ Clear inventory of all supported events
+
+### 3. Extract Organization Resolution to Service
+
+Organization lookup is shared logic - extract to a service:
+
+```typescript
+// lib/resolve-organization.ts
+import { createServiceRoleClient } from "@/app/_shared/lib/supabase/server";
+
+/**
+ * Resolve organization ID from webhook payload
+ * Different providers store org context differently
+ */
+export async function resolveOrganization(
+  provider: "nylas" | "stripe" | "clerk",
+  payload: unknown
+): Promise<string | undefined> {
+  const supabase = await createServiceRoleClient();
+
+  switch (provider) {
+    case "nylas": {
+      const configId = (payload as any).config_id;
+      const { data } = await supabase
+        .from("call_booking_links")
+        .select("organization_id")
+        .eq("nylas_config_id", configId)
+        .single();
+      return data?.organization_id;
+    }
+    case "stripe": {
+      // Check metadata first, then lookup by customer
+      const metadata = (payload as any).metadata;
+      if (metadata?.organization_id) return metadata.organization_id;
+      // ... customer lookup logic
+    }
+    case "clerk": {
+      // Clerk events contain org_id directly
+      return (payload as any).organization_id;
+    }
+  }
+}
+```
+
+### 4. Pass Execution Context to Handlers
+
+Handlers should receive all dependencies via context - no hidden creations:
+
+```typescript
+// ❌ WRONG - Handler creates own dependencies
+export async function handleBookingCreated(payload: BookingPayload) {
+  const supabase = await createServiceRoleClient();  // Hidden dependency
+  const logger = createModuleLogger("booking");      // Hidden dependency
+  // ...
+}
+
+// ✅ CORRECT - Dependencies injected via context
+export async function handleBookingCreated(
+  payload: BookingPayload,
+  context: WebhookContext
+): Promise<WebhookResult> {
+  const { supabase, logger, organizationId } = context;
+  // All dependencies explicit and testable
+}
+```
+
+### 5. One Handler Per Event Type
+
+Each handler file should handle ONE event type:
+
+```
+handlers/
+├── booking-created.ts      # Only booking.created
+├── booking-cancelled.ts    # Only booking.cancelled
+├── booking-rescheduled.ts  # Only booking.rescheduled
+├── grant-created.ts        # Only grant.created
+└── grant-expired.ts        # Only grant.expired
+```
+
+**NOT**:
+```
+handlers/
+├── booking-handler.ts      # ❌ Handles multiple events
+└── grant-handler.ts        # ❌ Big switch statement inside
+```
+
+### 6. Colocate Validation Schemas with Handlers
+
+Keep Zod schemas near the code that uses them:
+
+```typescript
+// handlers/booking-created.ts
+
+// Schema colocated with handler
+export const BookingCreatedSchema = z.object({
+  booking_id: z.string().min(1),
+  configuration_id: z.string().min(1),
+  start_time: z.number(),
+  end_time: z.number(),
+  participants: z.array(z.object({
+    email: z.string().email(),
+    name: z.string().optional(),
+  })),
+});
+
+export type BookingCreatedPayload = z.infer<typeof BookingCreatedSchema>;
+
+export async function handleBookingCreated(
+  payload: BookingCreatedPayload,
+  context: WebhookContext
+): Promise<WebhookResult> {
+  // Handler implementation
+}
+```
+
+## Route Template
+
+Full route template: `references/webhook-route-template.ts`
+
+## Adding a New Event Handler (Checklist)
+
+1. **Create handler file**: `handlers/[event-name].ts`
+   - Export Zod schema
+   - Export handler function
+   - Follow observability patterns
+
+2. **Register in registry**: `lib/handler-registry.ts`
+   - Add entry with schema and handler
+   - Set `requiresOrganization` flag
+
+3. **Done!** No route.ts changes needed.
+
+## Reference Implementation
+
+See the canonical examples at:
+- `app/api/webhooks/nylas/lib/handler-registry.ts` - Registry pattern
+- `app/api/webhooks/nylas/lib/resolve-organization.ts` - Org resolution
+- `app/api/webhooks/nylas/handlers/booking-created.ts` - Handler example
+
+## Common Mistakes to Avoid
+
+1. **Business logic in route.ts** - Extract to handlers
+2. **Big switch statements** - Use registry pattern
+3. **Modifying route.ts for new events** - Use registry
+4. **Hidden dependencies in handlers** - Pass via context
+5. **Multiple events per handler file** - One file per event
+6. **Inline schemas** - Colocate with handlers
+7. **Duplicated org lookup logic** - Extract to service
+
+## Quick Reference
+
+| Concern | Location | Size Guide |
+|---------|----------|------------|
+| Signature verification | route.ts | ~10 lines |
+| Event routing | route.ts → registry | ~5 lines |
+| Payload validation | registry + schema | ~20 lines |
+| Org resolution | lib/resolve-organization.ts | ~30 lines |
+| Business logic | handlers/*.ts | As needed |
+| HTTP response | route.ts | ~5 lines |
+
+**Target**: Route.ts should be ≤200 lines. If larger, extract logic.

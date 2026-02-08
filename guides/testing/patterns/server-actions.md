@@ -1,0 +1,375 @@
+---
+title: "Testing Server Actions"
+description: "Server actions are the primary way mutations happen in your application. Test them thoroughly"
+tags: ["testing", "nextjs"]
+category: "testing"
+author: "Imran Gardezi"
+publishable: true
+---
+# Testing Server Actions
+
+Server actions are the primary way mutations happen in your application. Test them thoroughly.
+
+## Test File Location
+
+Colocate tests with actions:
+
+```
+app/(protected)/leads/_actions/
+├── update-lead.ts
+├── delete-lead.ts
+└── __tests__/
+    ├── update-lead.test.ts
+    └── delete-lead.test.ts
+```
+
+## Standard Test Structure
+
+```typescript
+import { describe, it, expect, vi, beforeEach, Mock } from "vitest";
+
+// ============================================================================
+// MOCKS - Using inline mock factory pattern for Bun compatibility
+// ============================================================================
+
+let mockAuthFn: Mock;
+let mockGetLeadFn: Mock;
+let mockUpdateLeadFn: Mock;
+let mockRevalidatePathFn: Mock;
+let mockLogWorkflowActionFn: Mock;
+
+vi.mock("@clerk/nextjs/server", () => ({
+  auth: () => mockAuthFn(),
+}));
+
+vi.mock("next/cache", () => ({
+  revalidatePath: (...args: unknown[]) => mockRevalidatePathFn(...args),
+}));
+
+vi.mock("@your-org/repositories/leads", () => ({
+  getLeadById: (...args: unknown[]) => mockGetLeadFn(...args),
+  updateLead: (...args: unknown[]) => mockUpdateLeadFn(...args),
+}));
+
+vi.mock("@/app/_shared/lib/audit/helpers", () => ({
+  logWorkflowAction: (...args: unknown[]) => mockLogWorkflowActionFn(...args),
+}));
+
+vi.mock("@/app/_shared/lib/sentry-logger", () => ({
+  createModuleLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
+// Import AFTER mocks
+import { updateLead } from "../update-lead";
+
+// ============================================================================
+// TEST DATA
+// ============================================================================
+
+const TEST_ORG_ID = "org_test_123";
+const TEST_USER_ID = "user_test_123";
+const TEST_LEAD_ID = "lead_test_456";
+
+// ============================================================================
+// TEST SUITE
+// ============================================================================
+
+describe("updateLead", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Default mock implementations
+    mockAuthFn = vi.fn(() =>
+      Promise.resolve({ userId: TEST_USER_ID, orgId: TEST_ORG_ID })
+    );
+
+    mockGetLeadFn = vi.fn(() =>
+      Promise.resolve({
+        id: TEST_LEAD_ID,
+        organization_id: TEST_ORG_ID,
+        email: "test@example.com",
+        status: "new",
+      })
+    );
+
+    mockUpdateLeadFn = vi.fn(() =>
+      Promise.resolve({
+        id: TEST_LEAD_ID,
+        status: "qualified",
+      })
+    );
+
+    mockRevalidatePathFn = vi.fn();
+    mockLogWorkflowActionFn = vi.fn();
+  });
+
+  // -------------------------------------------------------------------------
+  // Authentication
+  // -------------------------------------------------------------------------
+
+  describe("authentication", () => {
+    it("rejects unauthenticated requests", async () => {
+      mockAuthFn = vi.fn(() => Promise.resolve({ userId: null, orgId: null }));
+
+      const result = await updateLead({
+        leadId: TEST_LEAD_ID,
+        status: "qualified",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("Unauthorized");
+    });
+
+    it("accepts authenticated requests", async () => {
+      const result = await updateLead({
+        leadId: TEST_LEAD_ID,
+        status: "qualified",
+      });
+
+      expect(result.success).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Authorization
+  // -------------------------------------------------------------------------
+
+  describe("authorization", () => {
+    it("rejects cross-org access", async () => {
+      mockGetLeadFn = vi.fn(() =>
+        Promise.resolve({
+          id: TEST_LEAD_ID,
+          organization_id: "different_org", // Different org
+        })
+      );
+
+      const result = await updateLead({
+        leadId: TEST_LEAD_ID,
+        status: "qualified",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("Lead not found");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Validation
+  // -------------------------------------------------------------------------
+
+  describe("validation", () => {
+    it("rejects invalid lead ID", async () => {
+      const result = await updateLead({
+        leadId: "not-a-uuid",
+        status: "qualified",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid");
+    });
+
+    it("rejects invalid status", async () => {
+      const result = await updateLead({
+        leadId: TEST_LEAD_ID,
+        status: "invalid_status" as any,
+      });
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Business Logic
+  // -------------------------------------------------------------------------
+
+  describe("business logic", () => {
+    it("updates lead status", async () => {
+      await updateLead({
+        leadId: TEST_LEAD_ID,
+        status: "qualified",
+      });
+
+      expect(mockUpdateLeadFn).toHaveBeenCalledWith(
+        expect.any(Object), // supabase client
+        TEST_LEAD_ID,
+        { status: "qualified" }
+      );
+    });
+
+    it("sets qualified_at when qualifying", async () => {
+      await updateLead({
+        leadId: TEST_LEAD_ID,
+        status: "qualified",
+      });
+
+      expect(mockUpdateLeadFn).toHaveBeenCalledWith(
+        expect.any(Object),
+        TEST_LEAD_ID,
+        expect.objectContaining({
+          status: "qualified",
+          qualified_at: expect.any(String),
+        })
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Side Effects
+  // -------------------------------------------------------------------------
+
+  describe("side effects", () => {
+    it("revalidates leads path after update", async () => {
+      await updateLead({
+        leadId: TEST_LEAD_ID,
+        status: "qualified",
+      });
+
+      expect(mockRevalidatePathFn).toHaveBeenCalledWith("/leads");
+    });
+
+    it("logs audit trail", async () => {
+      await updateLead({
+        leadId: TEST_LEAD_ID,
+        status: "qualified",
+      });
+
+      expect(mockLogWorkflowActionFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "lead.updated",
+          entityType: "lead",
+          entityId: TEST_LEAD_ID,
+          organizationId: TEST_ORG_ID,
+        })
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Error Handling
+  // -------------------------------------------------------------------------
+
+  describe("error handling", () => {
+    it("handles database errors gracefully", async () => {
+      mockUpdateLeadFn = vi.fn(() =>
+        Promise.reject(new Error("Database connection failed"))
+      );
+
+      const result = await updateLead({
+        leadId: TEST_LEAD_ID,
+        status: "qualified",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("Database connection failed");
+    });
+
+    it("handles missing lead", async () => {
+      mockGetLeadFn = vi.fn(() => Promise.resolve(null));
+
+      const result = await updateLead({
+        leadId: TEST_LEAD_ID,
+        status: "qualified",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("Lead not found");
+    });
+  });
+});
+```
+
+## What to Test
+
+### Always Test
+
+1. **Authentication** - Unauthenticated users rejected
+2. **Authorization** - Cross-org access blocked
+3. **Input Validation** - Invalid data rejected with clear errors
+4. **Happy Path** - Correct data produces correct result
+5. **Cache Invalidation** - `revalidatePath()` called
+6. **Audit Logging** - Action logged correctly
+
+### Test When Applicable
+
+1. **Permissions** - Role-based access (admin vs member)
+2. **State Transitions** - Status changes are valid
+3. **Concurrent Access** - Optimistic locking works
+4. **External APIs** - Third-party failures handled
+
+## Coverage Target
+
+Server actions should have **90%+ coverage** for P0/P1 actions.
+
+## Common Patterns
+
+### Testing Optimistic Updates
+
+```typescript
+it("returns updated data for optimistic UI", async () => {
+  const result = await updateLead({
+    leadId: TEST_LEAD_ID,
+    status: "qualified",
+  });
+
+  expect(result.success).toBe(true);
+  expect(result.data).toEqual(
+    expect.objectContaining({
+      id: TEST_LEAD_ID,
+      status: "qualified",
+    })
+  );
+});
+```
+
+### Testing Form Validation
+
+```typescript
+describe("validation", () => {
+  it.each([
+    ["empty string", ""],
+    ["too short", "ab"],
+    ["too long", "a".repeat(256)],
+  ])("rejects invalid name: %s", async (_, name) => {
+    const result = await createLead({ name, email: "test@example.com" });
+    expect(result.success).toBe(false);
+  });
+});
+```
+
+### Testing Permission Levels
+
+```typescript
+describe("permissions", () => {
+  it("allows admin to delete", async () => {
+    mockAuthFn = vi.fn(() =>
+      Promise.resolve({
+        userId: TEST_USER_ID,
+        orgId: TEST_ORG_ID,
+        orgRole: "org:admin",
+      })
+    );
+
+    const result = await deleteLead({ leadId: TEST_LEAD_ID });
+    expect(result.success).toBe(true);
+  });
+
+  it("blocks member from deleting", async () => {
+    mockAuthFn = vi.fn(() =>
+      Promise.resolve({
+        userId: TEST_USER_ID,
+        orgId: TEST_ORG_ID,
+        orgRole: "org:member",
+      })
+    );
+
+    const result = await deleteLead({ leadId: TEST_LEAD_ID });
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Permission denied");
+  });
+});
+```

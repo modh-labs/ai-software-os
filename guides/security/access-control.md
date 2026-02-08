@@ -1,0 +1,78 @@
+---
+title: "Access Control and RLS Patterns"
+description: "your project uses a layered access control model that enforces multi-tenant isolation at every level. No single layer..."
+tags: ["security", "database", "supabase"]
+category: "security"
+author: "Imran Gardezi"
+publishable: true
+---
+# Access Control Architecture
+
+## Overview
+
+your project uses a layered access control model that enforces multi-tenant isolation at every level. No single layer is trusted in isolation — each provides defense-in-depth.
+
+## Authentication Layers
+
+### 1. Clerk (Identity Provider)
+
+- **What it does:** Handles user registration, login, MFA, and organization membership
+- **Token format:** JWT with `org_id`, `org_role`, `sub` (user ID) claims
+- **Cookie management:** httpOnly, secure, sameSite=lax (managed by Clerk SDK)
+- **Organization support:** Users belong to organizations with roles (admin, member)
+
+### 2. Supabase JWT (Database Access)
+
+- **What it does:** Clerk JWT is exchanged for a Supabase JWT that RLS policies read
+- **How:** Clerk JWT template injects `org_id` into the Supabase token
+- **RLS reads:** `auth.jwt() ->> 'org_id'` to scope all queries to the tenant
+
+### 3. Row Level Security (Data Isolation)
+
+- **What it does:** PostgreSQL enforces that every query only returns data for the authenticated organization
+- **Enforcement:** `organization_id = auth.jwt() ->> 'org_id'` on all tables
+- **Verification:** Run `scripts/verify-rls-coverage.sql` to confirm 100% table coverage
+- **Service role:** Bypasses RLS (used only for webhooks, audit logging, and system operations)
+
+## Authorization Model
+
+| Role | Web App | API (Partner Keys) |
+|------|---------|-------------------|
+| `org:admin` | Full access, manage API keys, billing | N/A (API keys are org-scoped) |
+| `org:member` | Standard access, no key management | N/A |
+| API Key | N/A | Scoped by `scopes` array (e.g., `leads:read`, `calls:write`) |
+
+## API Authentication (Partner API)
+
+Two authentication methods are supported:
+
+### API Key Auth
+- Keys are SHA-256 hashed before storage (plaintext never stored)
+- Scopes restrict which endpoints the key can access
+- Optional expiry dates for time-limited access
+- Revocation is immediate (soft delete with `revoked_at` timestamp)
+- All lifecycle events are audit logged (SOC2 CC6.1)
+
+### Clerk JWT Auth (Mobile/Web Apps)
+- JWT verified using Clerk's JWKS endpoint
+- Organization claims extracted for RLS scoping
+- Used by first-party apps (mobile, web)
+
+## Data Flow
+
+```
+User Request
+  → Clerk Auth (verify identity)
+    → Supabase JWT (scope to org)
+      → RLS Policy (filter data)
+        → Repository (query execution)
+          → Response (org-scoped data only)
+```
+
+## Key Security Properties
+
+1. **Fail-closed:** Missing auth = denied (no fallback to permissive mode)
+2. **Defense-in-depth:** Auth at middleware + RLS at database = double enforcement
+3. **Principle of least privilege:** API keys have scoped permissions
+4. **Immutable audit trail:** All credential lifecycle events logged
+5. **No org_id in client code:** Organization scoping is server-side only

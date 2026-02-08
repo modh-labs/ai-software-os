@@ -1,0 +1,192 @@
+---
+name: data-fetching
+description: Implement data fetching following your project's Server Component and Suspense streaming patterns. Use when fetching data in pages, implementing caching, parallel queries, or discussing data flow. Enforces repositories, Server Components, and cache invalidation.
+allowed-tools: Read, Grep, Glob
+---
+
+# Data Fetching Skill
+
+## When This Skill Activates
+
+This skill automatically activates when you:
+- Fetch data in Server Components
+- Implement caching strategies
+- Discuss data flow patterns
+- Work with repositories in pages
+
+## Core Principle
+
+**All data fetching happens in Server Components via repositories.**
+
+```
+Page (Server Component)
+    ↓ calls
+Repository (Data Access)
+    ↓ queries
+Supabase (via RLS)
+    ↓ returns
+Typed Data
+    ↓ passes to
+Client Components (display only)
+```
+
+## Pattern 1: Basic Page Fetch
+
+```typescript
+// app/(protected)/calls/page.tsx
+import { createClient } from '@/app/_shared/lib/supabase/server';
+import { callsRepository } from '@/app/_shared/repositories/calls.repository';
+import { CallsTable } from './components/CallsTable';
+
+export default async function CallsPage() {
+  const supabase = await createClient();
+  const calls = await callsRepository.list(supabase);
+
+  return <CallsTable calls={calls} />;
+}
+```
+
+## Pattern 2: Parallel Fetching
+
+```typescript
+// ✅ CORRECT - Parallel fetches with Promise.all
+export default async function DashboardPage() {
+  const supabase = await createClient();
+
+  const [calls, leads, analytics] = await Promise.all([
+    callsRepository.list(supabase),
+    leadsRepository.list(supabase),
+    analyticsRepository.getDashboard(supabase),
+  ]);
+
+  return (
+    <Dashboard calls={calls} leads={leads} analytics={analytics} />
+  );
+}
+
+// ❌ WRONG - Sequential fetches (slower)
+const calls = await callsRepository.list(supabase);
+const leads = await leadsRepository.list(supabase);
+const analytics = await analyticsRepository.getDashboard(supabase);
+```
+
+## Pattern 3: Streaming with Suspense
+
+```typescript
+// page.tsx - Parent doesn't wait for children
+export default function CallsPage() {
+  return (
+    <div>
+      <h1>Calls</h1>
+      <Suspense fallback={<CallsTableSkeleton />}>
+        <CallsTableSection />
+      </Suspense>
+      <Suspense fallback={<StatsSkeleton />}>
+        <StatsSection />
+      </Suspense>
+    </div>
+  );
+}
+
+// Async Server Component - fetches independently
+async function CallsTableSection() {
+  const supabase = await createClient();
+  const calls = await callsRepository.list(supabase);
+  return <CallsTable calls={calls} />;
+}
+```
+
+## Pattern 4: Cache Invalidation
+
+After mutations, ALWAYS invalidate cache:
+
+```typescript
+// actions.ts
+'use server'
+
+export async function createCall(data: CreateCallInput) {
+  const supabase = await createClient();
+  const result = await callsRepository.create(supabase, data);
+
+  // ✅ ALWAYS invalidate after mutation
+  revalidatePath('/calls');
+  revalidatePath('/dashboard');
+
+  return { success: true, data: result };
+}
+```
+
+## Pattern 5: Error Handling
+
+```typescript
+// ✅ CORRECT - Graceful degradation
+export default async function DashboardPage() {
+  const supabase = await createClient();
+
+  const results = await Promise.allSettled([
+    callsRepository.list(supabase),
+    leadsRepository.list(supabase),
+  ]);
+
+  const calls = results[0].status === 'fulfilled' ? results[0].value : [];
+  const leads = results[1].status === 'fulfilled' ? results[1].value : [];
+
+  return <Dashboard calls={calls} leads={leads} />;
+}
+```
+
+## Data Flow Rules
+
+### DO
+
+- ✅ Fetch in Server Components (pages, layouts)
+- ✅ Use repositories for ALL database access
+- ✅ Use `Promise.all()` for parallel fetches
+- ✅ Use Suspense for streaming
+- ✅ Call `revalidatePath()` after mutations
+- ✅ Handle errors with `Promise.allSettled()`
+
+### DON'T
+
+- ❌ Fetch in Client Components
+- ❌ Use `supabase.from()` directly in pages
+- ❌ Use React Query/SWR for Supabase data
+- ❌ Create API routes for internal data
+- ❌ Skip cache invalidation after mutations
+
+## When to Use What
+
+| Scenario | Pattern |
+|----------|---------|
+| Simple page load | Basic fetch in page |
+| Multiple independent queries | `Promise.all()` |
+| Heavy page with sections | Suspense streaming |
+| Form submission | Server Action + `revalidatePath()` |
+| Real-time data | Supabase Realtime (rare) |
+| External API | React Query (only for Nylas, etc.) |
+
+## Anti-Patterns
+
+```typescript
+// ❌ WRONG - Fetching in Client Component
+'use client'
+function CallsList() {
+  const [calls, setCalls] = useState([]);
+  useEffect(() => {
+    fetchCalls().then(setCalls);  // Don't do this!
+  }, []);
+}
+
+// ❌ WRONG - Direct Supabase in page
+export default async function Page() {
+  const supabase = await createClient();
+  const { data } = await supabase.from('calls').select('*');  // Use repository!
+}
+
+// ❌ WRONG - API route for internal data
+// app/api/calls/route.ts - Don't create this!
+```
+
+## Reference
+
+For complete documentation: `@docs/patterns/data-fetching.md`

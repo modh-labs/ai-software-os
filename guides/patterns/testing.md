@@ -1,0 +1,89 @@
+---
+title: "Testing Patterns and Strategies"
+description: "Test organization patterns using the __tests__ directory convention."
+tags: ["testing", "typescript", "patterns"]
+category: "patterns"
+author: "Imran Gardezi"
+publishable: true
+---
+# Testing Patterns
+
+## Test Organization
+
+Tests use the **`__tests__` directory pattern** next to the code they test:
+
+```
+app/(protected)/calls/actions/
+├── cancel-reschedule-call.ts       # Source file
+└── __tests__/
+    ├── cancel-flow.test.ts          # Test file
+    └── reschedule-flow.test.ts      # Test file
+
+app/_shared/lib/email/
+├── service.ts                        # Source file
+└── __tests__/
+    └── service.test.ts               # Test file
+```
+
+### Why `__tests__` directories
+
+- Vitest module mocking works reliably with this pattern
+- Clear separation between source and test code
+- Standard convention in JavaScript/TypeScript ecosystem
+- Easier to exclude from builds (already in `.gitignore` patterns)
+
+### Naming Convention
+
+- Test files: `*.test.ts` or `*.test.tsx`
+- Integration tests: `*-integration.test.ts`
+- E2E tests: `*.e2e.test.ts`
+
+---
+
+## Commands
+
+### Unit & Integration Tests (Vitest)
+
+```bash
+npm run test           # Watch mode (re-run on changes)
+npm run test:ci        # Single run (CI mode)
+npm run test:ui        # Interactive UI
+npm run test:coverage  # Generate coverage report
+```
+
+### End-to-End Tests (Playwright)
+
+```bash
+npm run test:e2e       # Headed mode (see browser)
+npm run test:e2e:ui    # Interactive UI
+npm run test:e2e:debug # Step-through debugger
+
+# Run against staging
+npm run test:e2e:staging  # Full E2E suite against staging.[YOUR_DOMAIN]
+
+# Seed/cleanup test data
+npm run seed:staging      # Create test data
+npm run cleanup:staging   # Remove test data
+```
+
+### Quality Checks
+
+```bash
+npm run ci             # Full pipeline (lint + typecheck + unit tests + E2E)
+npm run fix            # Auto-fix all lint/format issues
+npm run typecheck      # TypeScript type checking
+```
+
+---
+
+## Documentation References
+
+- **Master Guide**: `docs/testing/README.md`
+- **Vitest Best Practices**: `docs/TESTING-BEST-PRACTICES.md`
+- **Playwright Setup**: `docs/testing/PLAYWRIGHT_SETUP.md`
+- **Playwright Best Practices**: `docs/testing/PLAYWRIGHT_BEST_PRACTICES.md`
+- **Clerk Testing Guide**: `docs/testing/CLERK_TESTING_GUIDE.md`
+- **Mocking Strategy**: `docs/testing/MOCKING_STRATEGY.md`
+- **Test Data Management**: `docs/testing/TEST_DATA_MANAGEMENT.md`
+- **CI/CD Testing**: `docs/testing/CI_CD_TESTING.md`
+- **Troubleshooting**: `docs/testing/TROUBLESHOOTING.md`

@@ -1,0 +1,397 @@
+---
+title: "Mocking Strategies"
+description: "This guide covers mocking strategies for your application's test suite"
+tags: ["testing", "typescript"]
+category: "testing"
+author: "Imran Gardezi"
+publishable: true
+---
+# Mocking Guide
+
+This guide covers mocking strategies for your application's test suite.
+
+## Core Principle
+
+> **Mock at module boundaries, not internal implementation.**
+
+This means:
+- ✅ Mock the repository module
+- ❌ Don't mock Supabase client internals
+- ✅ Mock the auth module
+- ❌ Don't mock Clerk JWT verification
+
+## Bun-Compatible Mock Pattern
+
+Bun's Vitest runner has limitations. Use this pattern:
+
+```typescript
+import { describe, it, expect, vi, beforeEach, Mock } from "vitest";
+
+// 1. Declare mock variables
+let mockFunctionName: Mock;
+
+// 2. Set up vi.mock with inline factory
+vi.mock("@/module", () => ({
+  functionName: (...args: unknown[]) => mockFunctionName(...args),
+}));
+
+// 3. Import AFTER mocks
+import { myFunction } from "../my-module";
+
+describe("myFunction", () => {
+  // 4. Initialize mock in beforeEach
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFunctionName = vi.fn(() => Promise.resolve(/* default value */));
+  });
+
+  it("uses the mock", async () => {
+    // 5. Override mock for specific test
+    mockFunctionName = vi.fn(() => Promise.resolve({ custom: "value" }));
+
+    const result = await myFunction();
+
+    expect(result.custom).toBe("value");
+  });
+});
+```
+
+## Common Mocks
+
+### Clerk Authentication
+
+```typescript
+let mockAuthFn: Mock;
+
+vi.mock("@clerk/nextjs/server", () => ({
+  auth: () => mockAuthFn(),
+}));
+
+beforeEach(() => {
+  // Authenticated user
+  mockAuthFn = vi.fn(() =>
+    Promise.resolve({
+      userId: "user_test_123",
+      orgId: "org_test_123",
+    })
+  );
+});
+
+// Test unauthenticated scenario
+it("rejects unauthenticated users", async () => {
+  mockAuthFn = vi.fn(() => Promise.resolve({ userId: null, orgId: null }));
+
+  const result = await myAction();
+
+  expect(result.error).toBe("Unauthorized");
+});
+```
+
+### Repository Mocks
+
+```typescript
+let mockGetByIdFn: Mock;
+let mockUpdateFn: Mock;
+
+vi.mock("@your-org/repositories/leads", () => ({
+  getLeadById: (...args: unknown[]) => mockGetByIdFn(...args),
+  updateLead: (...args: unknown[]) => mockUpdateFn(...args),
+}));
+
+beforeEach(() => {
+  mockGetByIdFn = vi.fn(() =>
+    Promise.resolve({
+      id: "lead_123",
+      organization_id: "org_test_123",
+      email: "test@example.com",
+    })
+  );
+
+  mockUpdateFn = vi.fn(() =>
+    Promise.resolve({
+      id: "lead_123",
+      status: "qualified",
+    })
+  );
+});
+```
+
+### Supabase Client
+
+```typescript
+let mockCreateServiceRoleClientFn: Mock;
+
+vi.mock("@/app/_shared/lib/supabase/server", () => ({
+  createServiceRoleClient: () => mockCreateServiceRoleClientFn(),
+}));
+
+beforeEach(() => {
+  // Return empty object - repositories handle the actual queries
+  mockCreateServiceRoleClientFn = vi.fn(() => Promise.resolve({}));
+});
+```
+
+### Next.js Headers
+
+```typescript
+let mockCookiesFn: Mock;
+
+vi.mock("next/headers", () => ({
+  cookies: () => mockCookiesFn(),
+}));
+
+beforeEach(() => {
+  mockCookiesFn = vi.fn(() => ({
+    get: vi.fn((name: string) => {
+      if (name === "my_cookie") return { value: "cookie_value" };
+      return undefined;
+    }),
+    set: vi.fn(),
+  }));
+});
+```
+
+### External APIs (Stripe)
+
+```typescript
+let mockStripeCheckoutFn: Mock;
+let mockStripePricesFn: Mock;
+
+vi.mock("stripe", () => ({
+  default: vi.fn().mockImplementation(() => ({
+    checkout: {
+      sessions: {
+        create: (...args: unknown[]) => mockStripeCheckoutFn(...args),
+      },
+    },
+    prices: {
+      retrieve: (...args: unknown[]) => mockStripePricesFn(...args),
+    },
+  })),
+}));
+
+// Also set environment variable
+const originalEnv = { ...process.env };
+process.env.STRIPE_SECRET_KEY = "sk_test_mock";
+
+afterAll(() => {
+  process.env = originalEnv;
+});
+
+beforeEach(() => {
+  mockStripeCheckoutFn = vi.fn(() =>
+    Promise.resolve({
+      id: "cs_test_123",
+      url: "https://checkout.stripe.com/test",
+    })
+  );
+});
+```
+
+### External APIs (Nylas)
+
+```typescript
+let mockNylasGrantFn: Mock;
+let mockNylasEventsFn: Mock;
+
+vi.mock("@/app/_shared/lib/nylas/client", () => ({
+  getNylasClient: () => ({
+    grants: {
+      find: (...args: unknown[]) => mockNylasGrantFn(...args),
+    },
+    events: {
+      list: (...args: unknown[]) => mockNylasEventsFn(...args),
+    },
+  }),
+}));
+```
+
+### Logger (Always Mock)
+
+```typescript
+vi.mock("@/app/_shared/lib/sentry-logger", () => ({
+  createModuleLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+```
+
+### Audit Logging
+
+```typescript
+let mockLogWorkflowActionFn: Mock;
+
+vi.mock("@/app/_shared/lib/audit/helpers", () => ({
+  logWorkflowAction: (...args: unknown[]) => mockLogWorkflowActionFn(...args),
+}));
+
+beforeEach(() => {
+  mockLogWorkflowActionFn = vi.fn();
+});
+
+// Verify audit logging in tests
+it("logs the action", async () => {
+  await performAction();
+
+  expect(mockLogWorkflowActionFn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      action: "lead.updated",
+      entityType: "lead",
+    })
+  );
+});
+```
+
+## Type-Safe Mock Helpers
+
+Create reusable mock helpers in `test/mocks/`:
+
+```typescript
+// test/mocks/repository-mock.ts
+import { Mock } from "vitest";
+
+type RepositoryMethods<T> = {
+  [K in keyof T]: T[K] extends (...args: any[]) => any ? Mock : never;
+};
+
+export function createMockRepository<T extends Record<string, (...args: any[]) => any>>(
+  overrides: Partial<RepositoryMethods<T>> = {}
+): RepositoryMethods<T> {
+  const mock = {} as RepositoryMethods<T>;
+
+  for (const key in overrides) {
+    if (overrides[key]) {
+      (mock as any)[key] = overrides[key];
+    }
+  }
+
+  return mock;
+}
+
+// Usage
+const mockCallsRepo = createMockRepository<CallsRepository>({
+  getCallById: vi.fn().mockResolvedValue(testCall),
+  updateCall: vi.fn().mockResolvedValue({ success: true }),
+});
+```
+
+## MSW for API Mocking
+
+For testing components that make HTTP requests:
+
+```typescript
+// test/mocks/handlers/nylas.ts
+import { http, HttpResponse } from "msw";
+
+export const nylasHandlers = [
+  http.get("https://api.nylas.com/v3/grants/:grantId", () => {
+    return HttpResponse.json({
+      data: {
+        id: "grant_123",
+        email: "test@example.com",
+        provider: "google",
+      },
+    });
+  }),
+
+  http.get("https://api.nylas.com/v3/grants/:grantId/events", () => {
+    return HttpResponse.json({
+      data: [
+        {
+          id: "event_123",
+          title: "Test Meeting",
+          when: { start_time: 1705766400 },
+        },
+      ],
+    });
+  }),
+];
+
+// test/mocks/server.ts
+import { setupServer } from "msw/node";
+import { nylasHandlers } from "./handlers/nylas";
+
+export const server = setupServer(...nylasHandlers);
+
+// vitest.setup.ts
+import { server } from "./test/mocks/server";
+
+beforeAll(() => server.listen());
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
+```
+
+## Anti-Patterns
+
+### ❌ Don't Mock Internal Implementation
+
+```typescript
+// BAD: Mocking Supabase query chain
+vi.mock("@/app/_shared/lib/supabase/server", () => ({
+  createClient: vi.fn().mockResolvedValue({
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: { id: "123" } }),
+        }),
+      }),
+    }),
+  }),
+}));
+```
+
+### ❌ Don't Use vi.hoisted or vi.mocked
+
+```typescript
+// BAD: These don't work in Bun
+const mockFn = vi.hoisted(() => vi.fn());
+const typedMock = vi.mocked(importedFn);
+```
+
+### ❌ Don't Import Before Mocks
+
+```typescript
+// BAD: Import happens before mock is set up
+import { myFunction } from "../my-module";
+
+vi.mock("dependency"); // Too late!
+```
+
+## Debugging Mock Issues
+
+### 1. Verify Mock Is Called
+
+```typescript
+it("calls the repository", async () => {
+  await performAction();
+
+  expect(mockRepositoryFn).toHaveBeenCalled();
+  console.log("Mock calls:", mockRepositoryFn.mock.calls);
+});
+```
+
+### 2. Check Mock Arguments
+
+```typescript
+expect(mockRepositoryFn).toHaveBeenCalledWith(
+  expect.any(Object), // Supabase client
+  "lead_123",
+  expect.objectContaining({ status: "qualified" })
+);
+```
+
+### 3. Mock Not Working? Check Import Order
+
+```typescript
+// Debug: Log when mock is set up
+console.log("Setting up mocks...");
+vi.mock("@/module", () => {
+  console.log("Mock factory called");
+  return { fn: () => mockFn() };
+});
+console.log("Importing module...");
+import { myFunction } from "../my-module";
+```

@@ -1,0 +1,344 @@
+---
+title: "Repository Testing Patterns"
+description: "How to test code that uses the repository pattern."
+tags: ["testing", "database", "patterns"]
+category: "patterns"
+author: "Imran Gardezi"
+publishable: true
+---
+# Repository Pattern Testing Guide
+
+## Overview
+
+This guide explains how to test code that uses the repository pattern, ensuring tests follow the same architectural principles as production code.
+
+---
+
+## Key Principles
+
+1. **Tests should use repositories** - Never use direct `supabase.from()` in tests (same as production)
+2. **Mock at the repository boundary** - Mock Supabase client passed to repositories, or use real Supabase for integration tests
+3. **Test repository functions directly** - Unit test repository logic separately from server actions
+4. **Integration tests use real repositories** - Test end-to-end flows with actual database
+
+---
+
+## Testing Patterns
+
+### Pattern 1: Unit Tests for Repositories (Mock Supabase)
+
+**When to use:** Testing repository logic in isolation, verifying query building, error handling.
+
+**Example:**
+
+```typescript
+// app/_shared/repositories/__tests__/sales.repository.test.ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { createMockSupabaseClient } from "@/test/mocks/supabase.mock";
+import { createSale, getSalesByCallId } from "../sales.repository";
+
+describe("sales.repository", () => {
+  let mockSupabase: ReturnType<typeof createMockSupabaseClient>;
+
+  beforeEach(() => {
+    mockSupabase = createMockSupabaseClient();
+  });
+
+  it("should create a sale", async () => {
+    const mockSale = {
+      id: "sale_123",
+      call_id: "call_456",
+      organization_id: "org_789",
+      amount: 1000,
+      status: "pending",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    // Mock the insert chain
+    mockSupabase._chain.insert.mockReturnValue(mockSupabase._chain);
+    mockSupabase._chain.select.mockReturnValue(mockSupabase._chain);
+    mockSupabase._chain.single.mockResolvedValue({
+      data: mockSale,
+      error: null,
+    });
+
+    const result = await createSale(
+      mockSupabase as unknown as SupabaseClient<Database>,
+      {
+        call_id: "call_456",
+        organization_id: "org_789",
+        amount: 1000,
+        status: "pending",
+      }
+    );
+
+    expect(result).toEqual(mockSale);
+    expect(mockSupabase.from).toHaveBeenCalledWith("sales");
+    expect(mockSupabase._chain.insert).toHaveBeenCalled();
+  });
+});
+```
+
+---
+
+### Pattern 2: Integration Tests for Repositories (Real Supabase)
+
+**When to use:** Testing against real database, verifying RLS policies, constraints, indexes.
+
+**Example:**
+
+```typescript
+// app/_shared/repositories/__tests__/sales.repository.test.ts
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { createServiceRoleClient } from "@/app/_shared/lib/supabase/server";
+import { createSale, getSalesByCallId, deleteSale } from "../sales.repository";
+
+describe("sales.repository (integration)", () => {
+  let supabase: Awaited<ReturnType<typeof createServiceRoleClient>>;
+  let testOrgId: string;
+  let testCallId: string;
+
+  beforeEach(async () => {
+    supabase = await createServiceRoleClient();
+    testOrgId = `test_org_${Date.now()}`;
+    testCallId = `test_call_${Date.now()}`;
+
+    // Create test call (required for foreign key)
+    await supabase.from("calls").insert({
+      id: testCallId,
+      organization_id: testOrgId,
+      scheduled_at: new Date().toISOString(),
+    });
+  });
+
+  afterEach(async () => {
+    // Cleanup
+    await supabase.from("sales").delete().eq("organization_id", testOrgId);
+    await supabase.from("calls").delete().eq("id", testCallId);
+  });
+
+  it("should create and retrieve sales", async () => {
+    const sale = await createSale(supabase, {
+      call_id: testCallId,
+      organization_id: testOrgId,
+      amount: 1000,
+      status: "pending",
+    });
+
+    expect(sale.id).toBeDefined();
+    expect(sale.amount).toBe(1000);
+
+    const sales = await getSalesByCallId(supabase, testCallId);
+    expect(sales).toHaveLength(1);
+    expect(sales[0].id).toBe(sale.id);
+  });
+});
+```
+
+---
+
+### Pattern 3: Testing Server Actions (Mock Repositories)
+
+**When to use:** Testing server action logic, business rules, error handling.
+
+**Strategy:** Mock repository functions instead of Supabase client.
+
+**Example:**
+
+```typescript
+// app/(protected)/calls/_actions/__tests__/update-payment-status.test.ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { updatePaymentStatusAction } from "../update-payment-status";
+import * as salesRepository from "@/app/_shared/repositories/sales.repository";
+
+// Mock the repository
+vi.mock("@/app/_shared/repositories/sales.repository", () => ({
+  updateSalesStatusByCallId: vi.fn(),
+}));
+
+describe("updatePaymentStatusAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("should update payment status for call sales", async () => {
+    const updateSalesStatusByCallId = vi.spyOn(
+      salesRepository,
+      "updateSalesStatusByCallId"
+    ).mockResolvedValue(undefined);
+
+    const result = await updatePaymentStatusAction({
+      callId: "call_123",
+      status: "paid",
+    });
+
+    expect(result.success).toBe(true);
+    expect(updateSalesStatusByCallId).toHaveBeenCalledWith(
+      expect.anything(), // supabase client
+      "call_123",
+      "paid"
+    );
+  });
+
+  it("should handle repository errors", async () => {
+    const updateSalesStatusByCallId = vi.spyOn(
+      salesRepository,
+      "updateSalesStatusByCallId"
+    ).mockRejectedValue(new Error("Database error"));
+
+    const result = await updatePaymentStatusAction({
+      callId: "call_123",
+      status: "paid",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Database error");
+  });
+});
+```
+
+---
+
+### Pattern 4: Testing Server Actions (Real Repositories)
+
+**When to use:** Integration tests for full server action flow, end-to-end testing.
+
+**Example:**
+
+```typescript
+// app/(protected)/calls/_actions/__tests__/update-payment-status.integration.test.ts
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { createServiceRoleClient } from "@/app/_shared/lib/supabase/server";
+import { updatePaymentStatusAction } from "../update-payment-status";
+import { createSale, getSalesByCallId } from "@/app/_shared/repositories/sales.repository";
+
+describe("updatePaymentStatusAction (integration)", () => {
+  let supabase: Awaited<ReturnType<typeof createServiceRoleClient>>;
+  let testOrgId: string;
+  let testCallId: string;
+
+  beforeEach(async () => {
+    supabase = await createServiceRoleClient();
+    testOrgId = `test_org_${Date.now()}`;
+    testCallId = `test_call_${Date.now()}`;
+
+    // Create test data
+    await supabase.from("calls").insert({
+      id: testCallId,
+      organization_id: testOrgId,
+      scheduled_at: new Date().toISOString(),
+    });
+
+    await createSale(supabase, {
+      call_id: testCallId,
+      organization_id: testOrgId,
+      amount: 1000,
+      status: "pending",
+    });
+  });
+
+  afterEach(async () => {
+    await supabase.from("sales").delete().eq("organization_id", testOrgId);
+    await supabase.from("calls").delete().eq("id", testCallId);
+  });
+
+  it("should update all sales for a call", async () => {
+    const result = await updatePaymentStatusAction({
+      callId: testCallId,
+      status: "paid",
+    });
+
+    expect(result.success).toBe(true);
+
+    const sales = await getSalesByCallId(supabase, testCallId);
+    expect(sales[0].status).toBe("paid");
+  });
+});
+```
+
+---
+
+## Best Practices
+
+### ✅ DO
+
+- **Test repositories in isolation** - Mock Supabase client, test query logic
+- **Mock repositories in action tests** - Focus on action logic, not database
+- **Use real Supabase for integration tests** - Verify RLS, constraints work
+- **Clean up test data** - Always delete test records in `afterEach`
+- **Use unique test IDs** - Prevent test collisions (`test_org_${Date.now()}`)
+
+### ❌ DON'T
+
+- **Don't use `supabase.from()` directly in tests** - Same rule as production
+- **Don't test Supabase query building in action tests** - That's repository responsibility
+- **Don't mix unit and integration tests** - Keep them separate files/describes
+- **Don't skip cleanup** - Test data pollution causes flaky tests
+
+---
+
+## Migration Checklist
+
+When migrating tests to use repositories:
+
+1. ✅ Replace `supabase.from("table")` with repository function calls
+2. ✅ Update mocks to mock repository functions instead of Supabase
+3. ✅ Move Supabase query logic tests to repository test files
+4. ✅ Keep action tests focused on business logic
+5. ✅ Add integration tests using real repositories
+
+---
+
+## Example Migration
+
+**Before (Direct Supabase):**
+
+```typescript
+// ❌ OLD - Direct Supabase usage
+it("should update payment status", async () => {
+  const mockSupabase = createMockSupabaseClient();
+  mockSupabase._chain.update.mockReturnValue(mockSupabase._chain);
+  mockSupabase._chain.eq.mockReturnValue(mockSupabase._chain);
+  mockSupabase._chain.single.mockResolvedValue({ data: null, error: null });
+
+  await updatePaymentStatusAction({ callId: "call_123", status: "paid" });
+
+  expect(mockSupabase.from).toHaveBeenCalledWith("sales");
+  // ... test query building details
+});
+```
+
+**After (Repository Pattern):**
+
+```typescript
+// ✅ NEW - Mock repository
+it("should update payment status", async () => {
+  const updateSalesStatusByCallId = vi.spyOn(
+    salesRepository,
+    "updateSalesStatusByCallId"
+  ).mockResolvedValue(undefined);
+
+  const result = await updatePaymentStatusAction({
+    callId: "call_123",
+    status: "paid",
+  });
+
+  expect(result.success).toBe(true);
+  expect(updateSalesStatusByCallId).toHaveBeenCalledWith(
+    expect.anything(),
+    "call_123",
+    "paid"
+  );
+});
+```
+
+---
+
+## Summary
+
+- **Repositories:** Test with mocked Supabase (unit) or real Supabase (integration)
+- **Server Actions:** Test with mocked repositories (unit) or real repositories (integration)
+- **Never use `supabase.from()` directly** - Always go through repositories
+- **Separate concerns** - Repository tests = query logic, Action tests = business logic

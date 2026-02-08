@@ -1,0 +1,89 @@
+---
+title: "Security Incident Response"
+description: "| Level | Description | Examples | Response Time |"
+tags: ["security", "observability"]
+category: "security"
+author: "Imran Gardezi"
+publishable: true
+---
+# Security Incident Response Plan
+
+## Severity Levels
+
+| Level | Description | Examples | Response Time |
+|-------|-------------|----------|---------------|
+| **P0 - Critical** | Active data breach or system compromise | Unauthorized data access, leaked credentials, RLS bypass | Immediate (< 1 hour) |
+| **P1 - High** | Potential breach or severe vulnerability | Exposed API key, auth bypass in staging, dependency CVE (critical) | < 4 hours |
+| **P2 - Medium** | Security weakness with no active exploitation | CSP violation reports, failed auth spike, dependency CVE (high) | < 24 hours |
+| **P3 - Low** | Minor security improvements | Permissive headers, documentation gaps | Next sprint |
+
+## Incident Response Steps
+
+### 1. Detection & Triage
+
+- **Automated alerts:** Sentry error spikes, rate limit alerts, audit log anomalies
+- **Manual detection:** Team member identifies suspicious activity
+- **Dependabot alerts:** GitHub advisory notifications for vulnerable dependencies
+
+**Triage checklist:**
+- [ ] Determine severity level (P0-P3)
+- [ ] Identify affected systems and data scope
+- [ ] Assess whether customer data was accessed
+- [ ] Notify incident commander (engineering lead)
+
+### 2. Containment
+
+**For credential compromise:**
+- [ ] Revoke affected API keys immediately via Settings > API Keys
+- [ ] Rotate `INTEGRATION_ENCRYPTION_KEY` if encryption key is compromised
+- [ ] Rotate Clerk signing keys if JWT secret is compromised
+- [ ] Review audit logs for unauthorized access (`audit_logs` table)
+
+**For application vulnerability:**
+- [ ] Deploy hotfix or enable maintenance mode
+- [ ] Block affected endpoints via rate limiting or middleware
+- [ ] Revoke sessions if auth system is compromised
+
+### 3. Investigation
+
+- [ ] Query `audit_logs` for the affected time window and entities
+- [ ] Review Sentry for error patterns and stack traces
+- [ ] Check rate limit logs for brute force attempts
+- [ ] Examine webhook_events for replay attacks or tampering
+- [ ] Review git history for unauthorized code changes
+
+### 4. Recovery
+
+- [ ] Patch the vulnerability
+- [ ] Re-encrypt affected data if encryption keys were rotated
+- [ ] Verify RLS policies are intact (`scripts/verify-rls-coverage.sql`)
+- [ ] Run full test suite (`bun ci`)
+- [ ] Deploy fix to production
+
+### 5. Post-Incident
+
+- [ ] Write incident report (timeline, root cause, impact, remediation)
+- [ ] Update security documentation if new controls were added
+- [ ] Review and update monitoring/alerting rules
+- [ ] Conduct team retrospective
+- [ ] Notify affected customers if required by data protection regulations
+
+## Communication
+
+| Audience | When | Channel |
+|----------|------|---------|
+| Engineering team | Immediately on detection | Slack #engineering |
+| Leadership | P0/P1 within 1 hour | Direct message + email |
+| Affected customers | After containment, if data exposed | Email via Resend |
+| Legal/compliance | P0 within 24 hours | Email |
+
+## Key Systems for Investigation
+
+| System | What to Check |
+|--------|---------------|
+| **Audit Logs** | `audit_logs` table — actor, entity, action, IP, timestamp |
+| **Sentry** | Error spikes, unusual patterns, source maps for stack traces |
+| **Rate Limiter** | Redis/in-memory logs for brute force patterns |
+| **Webhook Events** | `webhook_events` table for replay or tampering |
+| **Clerk Dashboard** | Active sessions, organization memberships |
+| **Supabase Dashboard** | Database access logs, connection patterns |

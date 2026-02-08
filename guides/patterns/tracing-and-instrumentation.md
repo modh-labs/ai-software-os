@@ -1,0 +1,405 @@
+---
+title: "Distributed Tracing and Instrumentation"
+description: "Distributed tracing patterns including trace propagation, log correlation, and debugging workflows."
+tags: ["observability", "sentry", "performance", "patterns"]
+category: "patterns"
+author: "Imran Gardezi"
+publishable: true
+---
+# Tracing and Instrumentation
+
+This document covers distributed tracing patterns in your application, including trace propagation, log correlation, and debugging workflows.
+
+## Architecture Decision: Sentry's Built-in OpenTelemetry
+
+**Key Decision:** We use Sentry SDK v10's native OpenTelemetry support. Do NOT add `@vercel/otel`.
+
+| Factor | Sentry Built-in OTEL | @vercel/otel |
+|--------|---------------------|--------------|
+| Current setup | Already configured | Would require migration |
+| Conflict risk | None | May conflict with Sentry's OTEL |
+| AI integrations | Native (vercelAIIntegration) | Manual instrumentation |
+| Vercel Log correlation | Works via trace_id in logs | Same |
+
+**Dependency:** We add only `@opentelemetry/api` (lightweight ~50KB API package, no implementations). This enables `trace.getActiveSpan()` to extract the current Sentry span context.
+
+---
+
+## Trace Context Utilities
+
+**Location:** `apps/web/app/_shared/lib/tracing/otel-context.ts`
+
+This module provides utilities to extract OpenTelemetry trace context and format it for various use cases.
+
+### Available Functions
+
+```typescript
+import {
+  getTracingOptionsForMastra,  // Format trace context for Mastra agents
+  getCurrentTraceId,           // Get 32-char hex trace ID
+  getCurrentSpanId,            // Get 16-char hex span ID
+  getSpanContext,              // Get full OTEL SpanContext
+} from "@/app/_shared/lib/tracing/otel-context";
+```
+
+### How It Works
+
+1. Sentry SDK registers itself as the global OTEL tracer provider
+2. `trace.getActiveSpan()` returns Sentry's span implementation
+3. We extract `traceId` and `spanId` for propagation
+4. No Sentry-specific APIs needed - standard OTEL works
+
+```typescript
+import { trace } from "@opentelemetry/api";
+
+const currentSpan = trace.getActiveSpan();
+const spanContext = currentSpan?.spanContext();
+// spanContext.traceId = "abc123..." (32 hex chars)
+// spanContext.spanId = "def456..." (16 hex chars)
+```
+
+---
+
+## Propagating Traces to Mastra Agents
+
+AI agent calls should maintain trace continuity for end-to-end visibility.
+
+### Pattern
+
+```typescript
+import { getTracingOptionsForMastra } from "@/app/_shared/lib/tracing/otel-context";
+import { runComprehensiveAnalysis } from "@your-org/agents";
+
+const result = await runComprehensiveAnalysis({
+  transcript: formattedTranscript,
+  leadName: "John Smith",
+  repName: "Jane Doe",
+  tracingOptions: getTracingOptionsForMastra(), // Propagate trace
+});
+```
+
+### Agent Interface Pattern
+
+All agent functions in `@your-org/agents` accept optional `tracingOptions`:
+
+```typescript
+export interface ComprehensiveAnalysisInput {
+  transcript: string;
+  leadName?: string;
+  repName?: string;
+  objectionOptions?: ObjectionOption[];
+  tracingOptions?: {
+    traceId: string;      // 32-char hex trace ID
+    parentSpanId: string; // 16-char hex span ID
+  };
+}
+```
+
+### Result: Connected Trace Waterfall
+
+```
+[Transaction] inngest.runCallAnalysis
+  └── [Span] run-analysis (Inngest step)
+      └── [Span] ai.comprehensive-analysis (custom span)
+          └── [Span] mastra.agent.generate (from tracingOptions)
+              └── [Span] openai.chat.completions (AI SDK auto-instrumented)
+```
+
+---
+
+## Auto-Injected Log Fields
+
+The `sentry-logger` automatically injects trace and user context into every log.
+
+### Injected Fields
+
+| Field | Source | Purpose |
+|-------|--------|---------|
+| `trace_id` | OpenTelemetry | Link logs to traces |
+| `span_id` | OpenTelemetry | Link logs to specific spans |
+| `user_id` | AsyncLocalStorage (Clerk) | User attribution |
+| `organization_id` | AsyncLocalStorage (Clerk) | Org isolation |
+| `organization_slug` | AsyncLocalStorage (Clerk) | Human-readable org |
+| `organization_role` | AsyncLocalStorage (Clerk) | User's role in org |
+| `request_id` | AsyncLocalStorage | Request correlation |
+| `request_path` | AsyncLocalStorage | Request URL path |
+| `request_method` | AsyncLocalStorage | HTTP method (GET, POST, etc.) |
+| `session_id` | AsyncLocalStorage | Session tracking |
+
+### How Injection Works
+
+```typescript
+// sentry-logger.ts (simplified)
+function createLogFn(level: LogLevel, bindings: LogAttributes = {}) {
+  return (arg1: LogObject, arg2?: string | LogAttributes) => {
+    const traceId = getCurrentTraceId();
+    const spanId = getCurrentSpanId();
+
+    const merged = redactSensitive({
+      ...getContextAttributes(),  // user_id, org_id, etc.
+      ...bindings,
+      ...attrs,
+      ...(traceId && { trace_id: traceId }),
+      ...(spanId && { span_id: spanId }),
+    });
+
+    Sentry.logger[level](message, merged);
+  };
+}
+```
+
+---
+
+## Vercel Log Drain Correlation
+
+When running on Vercel, logs are formatted as JSON for log drain correlation.
+
+### JSON Log Format (Vercel)
+
+```json
+{
+  "level": "info",
+  "message": "Processing call analysis",
+  "timestamp": "2026-01-18T10:30:00.000Z",
+  "trace_id": "abc123def456789...",
+  "span_id": "xyz789...",
+  "user_id": "user_abc123",
+  "organization_id": "org_xyz789",
+  "call_id": "call_123"
+}
+```
+
+### How to Correlate
+
+1. **Vercel Logs:** Search `trace_id:abc123...` to find all logs from one trace
+2. **Sentry Logs:** Click log → "View Trace" to see the full waterfall
+3. **Cross-reference:** Use the same `trace_id` to correlate Vercel and Sentry
+
+### Local Development
+
+Local logs use human-readable format:
+
+```
+[2026-01-18T10:30:00.000Z] [INFO] Processing call analysis { call_id: 'call_123', trace_id: 'abc123...' }
+```
+
+---
+
+## Sampling Strategy
+
+Tracing sample rates balance observability cost vs debugging capability.
+
+| Environment | Sample Rate | Rationale |
+|-------------|-------------|-----------|
+| Production | 10% | Cost control, sufficient for trends |
+| Preview | 50% | More debugging visibility |
+| Development | 100% | Full visibility for local work |
+| Staging | 100% | Full visibility for QA |
+
+### Configuration
+
+```typescript
+// sentry.server.config.ts
+Sentry.init({
+  tracesSampleRate: isProduction ? 0.1 : isPreview ? 0.5 : 1.0,
+  // ...
+});
+```
+
+### Performance-Based Sampling
+
+Slow transactions are always sampled (regardless of rate):
+
+```typescript
+tracesSampler: ({ name, attributes }) => {
+  // Always sample slow operations
+  if (attributes?.["http.duration"] > 3000) return 1.0;
+  // Use configured rate otherwise
+  return defaultRate;
+},
+```
+
+---
+
+## Performance Thresholds
+
+Track performance against these thresholds:
+
+| Metric | Warning | Error |
+|--------|---------|-------|
+| DB Query | >1s | >5s |
+| Server Action | >3s | >10s |
+| API Route | >2s | >8s |
+| AI Agent Call | >10s | >30s |
+| Media Processing | >60s | >180s |
+
+### Alerting
+
+Sentry alerts are configured for:
+- Error rate > 1% over 5 minutes
+- P95 latency > warning threshold
+- AI analysis failure rate > 5%
+
+---
+
+## Inngest Function Tracing
+
+Inngest functions are automatically instrumented via `@inngest/middleware-sentry`. Errors create Sentry Issues with function metadata tags.
+
+### Tags Added Automatically
+
+| Tag | Example | Purpose |
+|-----|---------|---------|
+| `inngest.function_name` | `process-media` | Identify which function failed |
+| `inngest.event_name` | `notetaker/media.process` | Identify triggering event |
+| `inngest.run_id` | `01KB7...` | Link to Inngest Dashboard |
+
+### Cross-referencing Inngest ↔ Sentry
+
+1. **Sentry → Inngest:** Copy `inngest.run_id` tag → paste in Inngest Dashboard search
+2. **Inngest → Sentry:** Copy run ID from Inngest → search Sentry: `inngest.run_id:01KB7...`
+
+---
+
+## vercelAIIntegration: `force: true` Requirement
+
+The `vercelAIIntegration` requires `force: true` on Vercel deployments. Without it, the integration silently fails because Vercel's bundler changes the `ai` package structure, breaking auto-detection.
+
+```typescript
+// sentry.server.config.ts AND sentry.edge.config.ts
+Sentry.vercelAIIntegration({
+  recordInputs: true,
+  recordOutputs: true,
+  force: true, // Required for Vercel — bypasses auto-detection
+}),
+```
+
+**Symptom without `force: true`:** AI spans show raw names (`ai.toolCall`) instead of semantic names (`gen_ai.chat.completions`), or don't appear at all.
+
+---
+
+## Debugging Workflows
+
+### 1. Error Investigation
+
+1. Open Sentry issue
+2. Check tags: `ai.verdict`, `inngest.source`, etc.
+3. View trace waterfall for timing
+4. Check context for full data
+
+### 2. Performance Investigation
+
+1. Open Sentry Performance
+2. Filter by transaction name
+3. View P50/P95 latency trends
+4. Drill into slow traces
+5. Check spans for bottlenecks
+
+### 3. Log Investigation
+
+1. Note the `trace_id` from any log or error
+2. Search Vercel Logs: `trace_id:abc123...`
+3. Or Sentry Logs: search same trace_id
+4. Click "View Trace" for full context
+
+### 4. AI Analysis Investigation
+
+1. Filter Sentry: `ai.verdict:failed`
+2. Check `ai_analysis_result` context
+3. View trace to see which span failed
+4. Check Mastra spans for AI-specific errors
+
+---
+
+## Creating Custom Spans
+
+For operations not auto-instrumented, create custom spans:
+
+```typescript
+import * as Sentry from "@sentry/nextjs";
+
+const result = await Sentry.startSpan(
+  {
+    name: "custom.my-operation",
+    op: "function",
+    attributes: {
+      "custom.input_size": input.length,
+      "custom.operation_type": "transform",
+    },
+  },
+  async (span) => {
+    const result = await myOperation(input);
+
+    // Add result attributes
+    span.setAttributes({
+      "custom.output_size": result.length,
+      "custom.success": true,
+    });
+
+    return result;
+  }
+);
+```
+
+### Span Naming Conventions
+
+| Pattern | Example | Use For |
+|---------|---------|---------|
+| `db.*` | `db.calls.list` | Database operations |
+| `ai.*` | `ai.comprehensive-analysis` | AI/ML operations |
+| `http.*` | `http.external-api` | External HTTP calls |
+| `function.*` | `function.process-media` | Business logic |
+
+---
+
+## Related Documentation
+
+- **Observability Standards:** `docs/standards/observability.md`
+- **Sentry Debugging:** `docs/patterns/sentry-debugging.md`
+- **AI Agents:** `packages/agents/CLAUDE.md`
+- **Alerting:** `docs/patterns/sentry-alerting.md`
+
+---
+
+## Troubleshooting
+
+### Traces Not Connected
+
+**Symptom:** AI spans appear as separate traces, not children of the request.
+
+**Fix:** Ensure `tracingOptions` is passed:
+
+```typescript
+const result = await runComprehensiveAnalysis({
+  transcript,
+  tracingOptions: getTracingOptionsForMastra(), // Don't forget this!
+});
+```
+
+### trace_id Missing from Logs
+
+**Symptom:** Logs don't have `trace_id` field.
+
+**Possible causes:**
+1. No active span when logging (background job without Sentry transaction)
+2. Using `console.log` instead of `logger`
+
+**Fix:** Wrap background jobs with Sentry transactions:
+
+```typescript
+await Sentry.startSpan({ name: "background.my-job" }, async () => {
+  logger.info("Starting job"); // trace_id will be present
+});
+```
+
+### Log Level Not Appearing in Sentry
+
+**Symptom:** `logger.info()` calls don't appear in Sentry Logs.
+
+**Cause:** Production filters to `info` level and above. `debug` logs are dropped.
+
+**Fix:** Use `logger.info()` or higher for events you need in Sentry in production.
+
+---
+
+**Last Updated:** February 2026

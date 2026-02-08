@@ -1,0 +1,218 @@
+---
+title: "CI Optimization: Fast Quality Gates"
+description: "your project's CI pipeline optimized for fast feedback with optional full verification."
+tags: ["ci-cd", "performance", "patterns"]
+category: "patterns"
+author: "Imran Gardezi"
+publishable: true
+---
+# CI Pipeline Optimization
+
+> **Last updated:** 2026-02-08
+> **Applies to:** All developers running `bun run ci`
+
+## Summary
+
+your project's CI pipeline is optimized for **fast feedback** (5s) with **optional full verification** (30s). The pipeline uses Turbo remote caching, TypeScript incremental builds, and conditional build steps to balance speed with safety.
+
+## Performance Profile
+
+| Mode | Time | What it does | When to use |
+|------|------|--------------|-------------|
+| `bun run ci` | ~5s | Lint + typecheck + tests | Daily development, before commits |
+| `bun run ci:build` | ~30s | Above + build verification | Before PRs, after refactoring |
+| `bun run ci:local` | ~5s | Interactive mode (no CI env) | Local debugging |
+
+## Key Optimizations
+
+### 1. Incremental TypeScript Builds
+
+**What:** TypeScript caches type information between runs using `.tsbuildinfo` files.
+
+**Impact:** Typecheck went from 9s → 3s (67% faster).
+
+**Config:**
+```json
+// tsconfig.json
+{
+  "compilerOptions": {
+    "incremental": true  // Enable caching
+  }
+}
+```
+
+**Turbo tracking:**
+```json
+// turbo.json
+"typecheck": {
+  "outputs": ["*.tsbuildinfo"]  // Track cache files
+}
+```
+
+### 2. Turbo Remote Caching
+
+**What:** Turbo shares task results across machines via remote cache.
+
+**Impact:** Subsequent CI runs on unchanged code: instant cache hits.
+
+**Config:**
+```yaml
+# .github/workflows/ci.yml
+env:
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+```
+
+**Cache keys:**
+- `turbo-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}`
+- Falls back to: `turbo-${{ runner.os }}-${{ hashFiles('bun.lock') }}-`
+
+### 3. Optional Build Verification
+
+**What:** Builds are **optional** by default to keep CI fast. Vercel builds on deploy anyway.
+
+**Why optional:**
+- Most changes don't break builds
+- Vercel catches build failures post-merge
+- 5s CI keeps developer flow smooth
+
+**When to enable:**
+```bash
+# Manual (before risky PRs)
+bun run ci:build
+
+# Automatic (uncomment in scripts/ci.sh)
+if [[ "${SKIP_BUILD:-}" != "true" ]]; then
+  run_step "Build Verification" bunx turbo build --filter=@your-org/web --filter=@your-org/api
+fi
+```
+
+## CI Pipeline Steps
+
+```bash
+# scripts/ci.sh
+
+# Fast checks first (1-2s)
+run_step "Lint & Format (Biome)"
+run_step "AGENTS.md Convention"
+
+# Type safety (3s)
+run_step "TypeScript Typecheck"  # ← Incremental builds
+
+# Builds (optional, 20-30s)
+# Commented out by default — use `ci:build` to enable
+
+# Tests (1-5s)
+run_step "Unit & Integration Tests"
+```
+
+**Total:** 4 steps, ~5s (or ~30s with builds)
+
+## When to Use `ci:build`
+
+✅ **Use full verification when:**
+- Creating a PR for main
+- After major refactoring
+- Touching build configuration (next.config.mjs, turbo.json)
+- Adding new dependencies
+- Before deploying to production
+
+❌ **Skip builds for:**
+- Quick iterations during development
+- Minor bug fixes
+- Documentation changes
+- Test-only changes
+
+## Trade-Offs
+
+### Current Approach: Optional Builds
+
+**Pros:**
+- ⚡ 5s CI keeps developer velocity high
+- ✅ Vercel catches build failures anyway (just later)
+- 🎯 Manual `ci:build` for critical paths
+
+**Cons:**
+- ⚠️ Main can break if PR passes CI but fails Vercel build
+- 🔄 Slower feedback loop for build issues
+
+### Alternative: Always Build
+
+**Pros:**
+- ✅ Main never has broken builds
+- ✅ Earlier feedback on build issues
+
+**Cons:**
+- 🐢 6x slower CI (5s → 30s)
+- 💰 More compute time in GitHub Actions
+
+## Migration Path
+
+To enable builds always:
+
+1. Uncomment build step in `scripts/ci.sh`:
+```bash
+if [[ "${SKIP_BUILD:-}" != "true" ]]; then
+  run_step "Build Verification" bunx turbo build --filter=@your-org/web --filter=@your-org/api
+fi
+```
+
+2. Update GitHub Actions (optional - for granular PR checks):
+```yaml
+- name: "Build Verification"
+  id: build
+  run: bunx turbo build --filter=@your-org/web --filter=@your-org/api
+```
+
+## Troubleshooting
+
+### "no output files found for task @your-org/web#typecheck"
+
+**Cause:** Turbo can't find `.tsbuildinfo` files.
+
+**Fix:** Check `turbo.json` has correct output pattern:
+```json
+"typecheck": {
+  "outputs": ["*.tsbuildinfo"]  // NOT [".tsbuildinfo"]
+}
+```
+
+### TypeScript incremental builds not working
+
+**Cause:** `incremental: true` missing from tsconfig.json.
+
+**Fix:**
+```json
+{
+  "compilerOptions": {
+    "incremental": true,
+    "noEmit": true  // Required for type-check-only packages
+  }
+}
+```
+
+### Turbo cache not hitting
+
+**Cause:** Inputs changed or remote cache misconfigured.
+
+**Debug:**
+```bash
+# Check what changed
+bunx turbo typecheck --dry=json
+
+# Verify remote cache
+echo $TURBO_TOKEN  # Should be set in CI
+```
+
+## Related Files
+
+- `scripts/ci.sh` - CI orchestration script
+- `turbo.json` - Task definitions and caching config
+- `.github/workflows/ci.yml` - GitHub Actions workflow
+- `tsconfig.json` - TypeScript incremental build settings
+
+## Related Docs
+
+- [CI/CD Quick Reference](/.github/AGENTS.md)
+- [CI Pipeline Conventions](/.claude/skills/ci-pipeline/SKILL.md)
+- [Testing Patterns](/docs/patterns/testing.md)

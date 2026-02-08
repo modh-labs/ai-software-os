@@ -1,0 +1,369 @@
+---
+title: "AI-Assisted Database Workflow"
+description: "Safe workflow for AI-assisted database schema changes with type sync and zero manual steps."
+tags: ["database", "ai-tooling", "claude-code", "patterns"]
+category: "patterns"
+author: "Imran Gardezi"
+publishable: true
+---
+# AI Database Workflow
+
+## For AI Tools (Seer, Cursor, Claude)
+
+When making database schema changes, follow this workflow to ensure safety, type sync, and zero manual steps.
+
+`★ Key Principle ─────────────────────────────────────`
+**Types are generated in CI, not locally**. AI tools focus on schema changes and migrations. CI automatically generates types from the actual database schema and commits them back to the PR.
+`─────────────────────────────────────────────────────`
+
+---
+
+## Quick Start
+
+### Step 1: Edit Schema Files
+Edit files in `supabase/schemas/` (never edit migrations directly)
+
+```sql
+-- Example: supabase/schemas/tables/calls.sql
+ALTER TABLE public.calls
+ADD COLUMN summary text;
+```
+
+### Step 2: Run AI Workflow Script
+```bash
+./scripts/ai-db-workflow.sh
+```
+
+Or use the package.json script:
+```bash
+bun run db:ai-workflow
+```
+
+**What this does**:
+- ✅ Generates migration from schema diff
+- ✅ Tests migration on local Supabase Docker
+- ✅ Validates dangerous SQL patterns
+- ✅ Runs database tests (optional)
+- ✅ Shows next steps
+
+**Fast mode** (skip tests):
+```bash
+bun run db:ai-workflow:fast
+```
+
+### Step 3: Commit Changes
+```bash
+git add supabase/schemas/ supabase/migrations/
+git commit -m "feat(db): Add summary column to calls table"
+git push
+```
+
+### Step 4: CI Auto-Generates Types
+- ✅ CI validates migrations
+- ✅ CI generates types from live schema
+- ✅ CI commits types back to your PR automatically
+- ✅ No manual `bun run db:types` needed!
+
+---
+
+## Safety Guardrails
+
+### Layer 1: Pre-Commit (10s)
+**Runs automatically when you commit**
+
+Checks:
+- ✅ Migration syntax validation (fail fast)
+- ✅ Dangerous SQL patterns (warnings)
+- ✅ Local Docker testing (fail if migration breaks)
+
+### Layer 2: CI Validation (3min)
+**Runs automatically on PR**
+
+Checks:
+- ✅ Fresh migration apply from scratch
+- ✅ Type generation from live schema
+- ✅ Auto-commit types back to PR
+- ✅ Integration test suite
+
+### Layer 3: Deploy (5min)
+**Runs automatically on merge to main/release**
+
+Checks:
+- ✅ Staging migration apply + health check
+- ✅ Production migration with rollback capability
+- ✅ Type regeneration (should match CI)
+
+---
+
+## Dangerous Patterns (Blocked/Warned)
+
+### ❌ DROP TABLE without IF EXISTS
+```sql
+-- Bad (will warn)
+DROP TABLE users;
+
+-- Good
+DROP TABLE IF EXISTS users;
+```
+
+### ❌ DROP COLUMN (Breaking Change)
+```sql
+-- Bad (will warn)
+ALTER TABLE calls DROP COLUMN outcome;
+
+-- Better: 3-step deprecation
+-- Step 1: Mark column as deprecated in comments, stop writing to it
+-- Step 2: Deploy code that doesn't read column
+-- Step 3: Drop column after confirming no usage
+```
+
+### ❌ NOT NULL without DEFAULT
+```sql
+-- Bad (will warn - fails if table has rows)
+ALTER TABLE calls ADD COLUMN outcome VARCHAR NOT NULL;
+
+-- Good
+ALTER TABLE calls ADD COLUMN outcome VARCHAR NOT NULL DEFAULT 'pending';
+```
+
+### ❌ UPDATE/DELETE without WHERE
+```sql
+-- Bad (affects all rows)
+UPDATE calls SET status = 'closed';
+
+-- Good
+UPDATE calls SET status = 'closed' WHERE created_at < '2024-01-01';
+```
+
+---
+
+## Workflow Examples
+
+### Example 1: Add Column (Happy Path)
+
+**1. Edit schema:**
+```sql
+-- supabase/schemas/tables/leads.sql
+ALTER TABLE public.leads
+ADD COLUMN source VARCHAR(50) DEFAULT 'unknown';
+```
+
+**2. Run workflow:**
+```bash
+bun run db:ai-workflow
+```
+
+**Output:**
+```
+🤖 AI Database Workflow Starting...
+✅ Supabase is already running
+🔍 Schema changes detected:
+  - supabase/schemas/tables/leads.sql
+📝 Generating migration...
+✅ Migration generated: supabase/migrations/20260112120000_ai_generated.sql
+🧪 Testing migration on fresh database...
+✅ All migrations apply successfully
+🛡️ Checking for dangerous SQL patterns...
+✅ No dangerous patterns detected
+✅ Migration validated locally!
+
+Next steps:
+  1. Review the migration file
+  2. git add supabase/schemas/ supabase/migrations/
+  3. git commit -m 'feat(db): Add source column to leads'
+  4. git push
+```
+
+**3. Commit:**
+```bash
+git add supabase/schemas/ supabase/migrations/
+git commit -m "feat(db): Add source tracking to leads"
+git push
+```
+
+**4. CI runs:**
+- ✅ Migration validation passes
+- ✅ Types generated from live schema
+- ✅ Types committed back to PR (automatic)
+
+**PR shows 2 commits:**
+1. Your commit: schema + migration
+2. github-actions[bot]: Regenerate database types [skip ci]
+
+### Example 2: Dangerous Pattern (Blocked)
+
+**1. Edit schema with dangerous SQL:**
+```sql
+-- supabase/schemas/tables/users.sql
+DROP TABLE users;  -- Missing IF EXISTS
+```
+
+**2. Run workflow:**
+```bash
+bun run db:ai-workflow
+```
+
+**Output:**
+```
+⚠️ WARNING: DROP TABLE without IF EXISTS detected
+Consider: DROP TABLE IF EXISTS table_name;
+```
+
+**3. Fix and re-run:**
+```sql
+DROP TABLE IF EXISTS users;
+```
+
+### Example 3: Type Sync (Auto-Fixed)
+
+**Scenario:** Developer manually edited types file (out of sync)
+
+**1. Push PR with out-of-sync types**
+
+**2. CI detects mismatch:**
+```
+✅ Database types changed, will commit
+```
+
+**3. CI auto-commits correct types:**
+```
+chore(db): Regenerate database types [skip ci]
+```
+
+**Result:** PR automatically updated with correct types
+
+---
+
+## Troubleshooting
+
+### "Failed to generate migration"
+
+**Cause:** Schema syntax error or conflicts with existing tables
+
+**Solution:**
+```bash
+# Reset local database
+supabase db reset --local
+
+# Check schema syntax
+# Fix syntax error in schema file
+# Run workflow again
+bun run db:ai-workflow
+```
+
+### "Migration failed to apply"
+
+**Cause:** Migration has syntax error or references non-existent tables
+
+**Solution:**
+1. Check migration file for errors
+2. Test locally: `supabase db reset --local`
+3. Fix migration file
+4. Recommit
+
+### "Supabase not running"
+
+**Cause:** Docker not started
+
+**Solution:**
+```bash
+# Start Supabase
+supabase db start
+
+# Or let the workflow start it automatically
+bun run db:ai-workflow
+```
+
+### "Types are out of sync"
+
+**Cause:** Local types don't match remote schema
+
+**Solution:**
+- Don't worry! CI will fix it automatically
+- CI generates types from live schema and commits back
+- Never run `bun run db:types` manually
+
+---
+
+## Best Practices
+
+### DO:
+- ✅ Edit schema files in `supabase/schemas/`
+- ✅ Run `bun run db:ai-workflow` after schema changes
+- ✅ Commit schema + migration together
+- ✅ Let CI generate and commit types automatically
+- ✅ Use `--skip-tests` flag for faster iteration during development
+- ✅ Review generated migration files before committing
+
+### DON'T:
+- ❌ Edit migration files directly (edit schemas instead)
+- ❌ Run `bun run db:types` manually (CI does this)
+- ❌ Commit types separately from migrations
+- ❌ Skip the pre-commit validation (it catches errors early)
+- ❌ Use dangerous SQL patterns without IF EXISTS/DEFAULT
+- ❌ Drop columns without a deprecation period
+
+---
+
+## Advanced: Schema-First Workflow
+
+The database uses a **schema-first approach**:
+
+```
+supabase/schemas/           # Source of truth (DDL)
+    ├── types/
+    │   └── enums.sql
+    ├── tables/
+    │   ├── users.sql
+    │   ├── calls.sql
+    │   └── leads.sql
+    └── policies/
+        └── rls.sql
+
+supabase/migrations/        # Generated diffs
+    ├── 20240101120000_initial.sql
+    └── 20260112120000_ai_generated.sql
+```
+
+**Workflow:**
+1. Edit files in `supabase/schemas/` (source of truth)
+2. Run `supabase db diff` to generate migration (AI workflow does this)
+3. Migration file contains ONLY the delta (ADD COLUMN, not full table)
+4. Commit schema + migration together
+5. CI generates types from applied schema
+
+**Why schema-first?**
+- ✅ Single source of truth for table definitions
+- ✅ Easy to understand current schema (just read schema files)
+- ✅ Migrations are deltas (safe, reviewable)
+- ✅ Can regenerate migrations from schemas if needed
+
+---
+
+## Performance
+
+| Stage | Time | What Happens |
+|-------|------|--------------|
+| Pre-commit | 10s | Schema validation, migration testing |
+| CI validation | 3min | Fresh migration apply, type generation |
+| Deploy | 5min | Remote migration apply, health checks |
+
+**Total overhead:** ~70 seconds per PR (compared to manual workflow)
+
+**Benefits:**
+- Zero manual type generation
+- Guaranteed type sync
+- AI-safe workflow
+- Fast feedback loop
+
+---
+
+## Related Documentation
+
+- [Database Workflow](./database-workflow.md) - Full database development guide
+- [Repository Pattern](./repository-pattern.md) - Using generated types in code
+- [CI/CD](./.github/CLAUDE.md) - Complete CI/CD pipeline documentation
+
+---
+
+**Last Updated:** January 12, 2026

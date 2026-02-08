@@ -1,0 +1,328 @@
+---
+title: "Embed Redirect Pattern: Solving Popup Blockers"
+description: "How redirect URLs work in embedded booking schedulers."
+tags: ["architecture", "patterns"]
+category: "patterns"
+author: "Imran Gardezi"
+publishable: true
+---
+# Embed Redirects
+
+> How redirect URLs work in embedded booking schedulers
+
+## Overview
+
+When a booking scheduler is embedded in an iframe, redirects after booking completion need special handling to avoid popup blockers. This document explains the implementation.
+
+## The Problem
+
+**Standard approach (doesn't work in iframes):**
+```typescript
+// ❌ Blocked by popup blockers when in iframe
+window.open("https://example.com/thank-you", "_blank");
+```
+
+**Why it fails:**
+- Browsers treat iframes with stricter popup permissions
+- Even programmatic link clicks can be blocked
+- User gets a popup blocker notification instead of redirect
+
+## The Solution
+
+Use **postMessage API** to have the parent window handle the redirect:
+
+```
+┌────────────────────────────────────┐
+│ Parent Page (client.com)          │
+│                                    │
+│  ┌──────────────────────────────┐ │
+│  │ Iframe (app.[YOUR_DOMAIN])     │ │
+│  │                              │ │
+│  │  User clicks "Continue"      │ │
+│  │         ↓                    │ │
+│  │  postMessage sent to parent  │ │
+│  └──────────┬───────────────────┘ │
+│             │                      │
+│    ← Message received              │
+│             ↓                      │
+│    Parent opens URL in new tab    │
+│    (not blocked!)                 │
+└────────────────────────────────────┘
+```
+
+## Implementation
+
+### 1. Iframe Side (`redirect-utils.ts`)
+
+```typescript
+export function redirectToNewTab(url: string) {
+  if (isEmbedContext()) {
+    // EMBEDDED: Use postMessage
+    window.parent.postMessage(
+      {
+        type: "[app]-embed:redirect",
+        url: url,
+      },
+      "*"
+    );
+
+    // Fallback after 1s: use target="_top" if parent doesn't respond
+    setTimeout(() => {
+      window.top!.location.href = url;
+    }, 1000);
+  } else {
+    // REGULAR: Use target="_blank"
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+}
+```
+
+### 2. Parent Side (`[app]-embed.js`)
+
+```typescript
+// Listen for redirect requests from embedded iframes
+window.addEventListener("message", (event) => {
+  // Validate message structure
+  if (event.data?.type !== "[app]-embed:redirect") {
+    return;
+  }
+
+  // Validate source is a managed the iframe
+  const sourceIframe = managedIframes.find(
+    (iframe) => iframe.contentWindow === event.source
+  );
+
+  if (!sourceIframe) {
+    return; // Not from our iframe
+  }
+
+  // Open URL in new tab (not blocked since parent opens it)
+  const link = document.createElement("a");
+  link.href = event.data.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+});
+```
+
+## Usage
+
+### For Booking Scheduler
+
+The booking success screen automatically uses this:
+
+```typescript
+// apps/web/app/_shared/components/booking-scheduler/internal/booking-success.tsx
+
+const handleContinueClick = useCallback(() => {
+  redirectToNewTab(redirectUrl); // Automatically handles embed vs regular
+}, [redirectUrl]);
+```
+
+## Embed Auto-Resize (No Internal Scroll)
+
+The booking embed is designed to grow to the content height so the host page
+scrolls and the iframe never needs an internal scrollbar.
+
+### Required Embed Pattern
+
+```html
+<script src="https://app.[YOUR_DOMAIN]/[app]-embed.js" async></script>
+<iframe data-[app]-embed src="https://app.[YOUR_DOMAIN]/org/link/embed"></iframe>
+```
+
+### Host Page Constraints (Important)
+
+- Do not wrap the iframe in a container with a fixed `max-height`.
+- Avoid `overflow: auto` or `overflow: hidden` on a fixed-height parent.
+- The embed script handles resizing; the iframe should be allowed to grow.
+
+### Where It Lives
+
+- Child height reporter: `apps/web/app/(public)/[orgSlug]/[linkSlug]/embed/layout.tsx`
+- Parent resizer: `apps/web/app/_shared/scripts/[app]-embed.ts`
+- Embed overrides: `apps/web/app/globals.css` (html/body/iframe-height rules)
+
+### For Custom Components
+
+```typescript
+import { redirectToNewTab } from "@/app/_shared/lib/redirect-utils";
+
+function MyComponent() {
+  const handleClick = () => {
+    // Works in both regular pages AND embedded iframes
+    redirectToNewTab("https://example.com/thank-you");
+  };
+
+  return <Button onClick={handleClick}>Continue</Button>;
+}
+```
+
+## Fallback Strategy
+
+If parent doesn't respond to postMessage in 1 second:
+
+1. **Embedded**: Use `window.top.location.href = url`
+   - Redirects the entire parent page (not ideal, but works)
+   - User doesn't see popup blocker
+
+2. **Regular**: Use `target="_blank"`
+   - Opens new tab
+   - May be blocked if browser settings are strict
+
+## Testing
+
+### Manual Testing
+
+1. Create a test HTML file:
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Embed Test</title>
+  <script src="https://app.[YOUR_DOMAIN]/[app]-embed.js" async></script>
+</head>
+<body>
+  <h1>Embed Test Page</h1>
+  <iframe
+    data-[app]-embed
+    src="https://app.[YOUR_DOMAIN]/your-org/your-link/embed"
+    style="width: 100%; min-height: 600px;"
+  ></iframe>
+</body>
+</html>
+```
+
+2. Open in browser
+3. Complete booking with redirect URL configured
+4. Verify new tab opens (not blocked)
+
+### Automated Testing
+
+```bash
+# Run redirect utils tests
+bun test apps/web/app/_shared/lib/__tests__/redirect-utils-embed.test.ts
+```
+
+## Browser Compatibility
+
+| Browser | postMessage | Fallback (target=_top) |
+|---------|------------|------------------------|
+| Chrome 90+ | ✅ | ✅ |
+| Firefox 88+ | ✅ | ✅ |
+| Safari 14+ | ✅ | ✅ |
+| Edge 90+ | ✅ | ✅ |
+
+## Security Considerations
+
+### Why `"*"` origin in postMessage?
+
+```typescript
+window.parent.postMessage(data, "*");
+```
+
+**Reason:** We don't know the parent domain in advance
+- Booking links can be embedded on any customer website
+- Restricting origin would break legitimate embeds
+
+**Safety:**
+- Parent validates message comes from managed iframe
+- Only redirect URLs are sent (no sensitive data)
+- Redirect URLs are user-configured (not attacker-controlled)
+
+### Why validate source iframe?
+
+```typescript
+const sourceIframe = managedIframes.find(
+  (iframe) => iframe.contentWindow === event.source
+);
+
+if (!sourceIframe) {
+  return; // Ignore
+}
+```
+
+**Reason:** Prevent malicious iframes from triggering redirects
+- Only messages from the embeds are processed
+- Random postMessages from other sources are ignored
+
+## Troubleshooting
+
+### Redirect still blocked
+
+**Symptoms:** Popup blocker notification appears
+
+**Causes:**
+1. Parent page doesn't include `[app]-embed.js`
+2. Very strict browser settings
+3. Third-party iframe (cross-origin without proper setup)
+
+**Solutions:**
+1. Ensure embed script is loaded: `<script src="https://app.[YOUR_DOMAIN]/[app]-embed.js" async></script>`
+2. Use `target="_top"` instead (see Configuration below)
+3. Check browser console for errors
+
+### Redirect navigates entire parent page
+
+**Symptoms:** Parent page redirects instead of opening new tab
+
+**Cause:** Parent didn't respond to postMessage (1s timeout)
+
+**Solutions:**
+1. Check embed script loaded correctly
+2. Check browser console for JavaScript errors
+3. Verify iframe URL is correct application domain
+
+### postMessage not received
+
+**Symptoms:** Fallback always triggers (parent page redirects)
+
+**Cause:** Security settings or CSP blocking postMessage
+
+**Solutions:**
+1. Check Content-Security-Policy headers
+2. Verify iframe isn't sandboxed: `<iframe sandbox="allow-scripts allow-same-origin">`
+3. Use browser dev tools to inspect postMessage events
+
+## Configuration
+
+### Prefer `target="_top"` over new tab
+
+If you want to redirect the parent page instead of opening new tab:
+
+```typescript
+// In booking success handler
+const handleContinueClick = useCallback(() => {
+  if (isEmbedContext()) {
+    // Redirect parent page directly
+    window.top!.location.href = redirectUrl;
+  } else {
+    // Regular redirect
+    redirectToNewTab(redirectUrl);
+  }
+}, [redirectUrl]);
+```
+
+## Related Files
+
+| File | Purpose |
+|------|---------|
+| `app/_shared/lib/redirect-utils.ts` | Core redirect logic |
+| `app/_shared/scripts/[app]-embed.ts` | Embed script source |
+| `public/[app]-embed.js` | Built embed script (served to customers) |
+| `scripts/build-embed.js` | Build script for embed |
+| `app/_shared/components/booking-scheduler/internal/booking-success.tsx` | Usage example |
+
+## Further Reading
+
+- [MDN: Window.postMessage()](https://developer.mozilla.org/en-US/docs/Web/API/Window/postMessage)
+- [MDN: Popup Blockers](https://developer.mozilla.org/en-US/docs/Web/API/Window/open#popup_condition)
+- [Embed Parameters](../../apps/web/app/(public)/[orgSlug]/[linkSlug]/CLAUDE.md#embed-parameters)

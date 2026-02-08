@@ -1,0 +1,792 @@
+---
+title: "Route Architecture Audit Guide"
+description: "Checklist to audit any route in the protected app directory."
+tags: ["nextjs", "architecture", "patterns"]
+category: "patterns"
+author: "Imran Gardezi"
+publishable: true
+---
+# Route Architecture Audit Checklist
+
+Use this checklist to audit any route in `app/(protected)/`. Create Linear issues for each failed check.
+
+## Quick Start
+
+1. Copy this checklist for the route you're auditing
+2. Run through each section systematically
+3. Document findings in the Notes column
+4. Create Linear issues for failed checks
+5. Calculate section scores
+
+---
+
+## 1. FILE STRUCTURE (Required Files)
+
+| Check | Pass | Notes |
+|-------|------|-------|
+| Has `page.tsx` (Server Component) | | |
+| Has `actions.ts` or `actions/` folder | | |
+| Has `loading.tsx` (skeleton matches UI) | | |
+| Has `error.tsx` (with retry button) | | |
+| Has `components/` folder for route-specific components | | |
+| Has `CLAUDE.md` documentation | | |
+
+**Score: ___ / 6**
+
+> **Required for every route**: `page.tsx`, `loading.tsx`, `error.tsx`, `actions.ts`, `CLAUDE.md`. Use `actions/` folder when you have 3+ server actions. See File Structure in `app/CLAUDE.md`.
+
+---
+
+## 2. DATA FETCHING PATTERNS
+
+| Check | Pass | Notes |
+|-------|------|-------|
+| Uses repository pattern (not direct `supabase.from()` in page) | | |
+| Parallel fetching with `Promise.all()` where applicable | | |
+| Individual `.catch()` OR graceful degradation at outer level | | |
+| No blocking sequential fetches that could be parallel | | |
+| Uses server actions for mutations (not API routes) | | |
+
+**Score: ___ / 5**
+
+> **Graceful Degradation**: Individual `.catch()` is ideal for partial failure scenarios. However, if the outer catch returns empty/default data (graceful degradation), that's acceptable. See "Missing Graceful Degradation" in Common Issues.
+
+---
+
+## 3. TYPE SAFETY
+
+| Check | Pass | Notes |
+|-------|------|-------|
+| No `any` types in component props | | |
+| No `as any` casts in business logic | | |
+| Uses Supabase-generated types (`Database["public"]["Tables"]`) | | |
+| All server action return types are explicit | | |
+| Shared types in `/app/_shared/types/` | | |
+
+**Score: ___ / 5**
+
+> **Type Location**: Types used by **multiple routes** belong in `_shared/types/`. Route-specific types (e.g., `DashboardData`) can stay colocated in route's `types.ts`. Follow the same 3+ routes threshold as components.
+
+---
+
+## 4. SERVER ACTIONS
+
+| Check | Pass | Notes |
+|-------|------|-------|
+| Colocated in route's `actions.ts` | | |
+| Uses `"use server"` directive | | |
+| Returns structured response `{ success, data?, error? }` (mutations only) | | |
+| Calls `revalidatePath()` or `updateTag()` after mutations | | |
+| Uses repository layer (not direct Supabase calls) | | |
+| Has Zod validation for user inputs | | |
+
+**Score: ___ / 6**
+
+> **Clarification**: The structured response pattern applies to **mutations only**. Read-only actions (fetch, list, get) can return data directly with graceful degradation (return empty data on error). See "Read-Only vs Mutation Server Actions" in Common Issues.
+
+---
+
+## 5. CLIENT COMPONENTS
+
+| Check | Pass | Notes |
+|-------|------|-------|
+| Uses `"use client"` directive where needed | | |
+| Uses `useTransition` for non-blocking updates | | |
+| Uses `useOptimistic` for instant UI feedback (immediate pattern) | | |
+| Uses `useMemo` for expensive calculations | | |
+| State is consolidated (not 10+ separate useState) | | |
+| Loading states shown during transitions | | |
+
+**Score: ___ / 6**
+
+> **Clarification**: `useOptimistic` is for the **immediate pattern** (each user action = server call). For **draft pattern** (local edits, explicit save button), `useTransition` alone is sufficient. See "Draft Pattern vs Immediate Pattern" in Common Issues.
+
+---
+
+## 6. SHARED INFRASTRUCTURE
+
+| Check | Pass | Notes |
+|-------|------|-------|
+| Repository exists in `/app/_shared/repositories/` | | |
+| Service layer for complex business logic (if needed) | | |
+| Validation schemas in `/app/_shared/validation/` | | |
+| Shared components imported from `/app/_shared/components/` | | |
+| No cross-route component imports | | |
+
+**Score: ___ / 5**
+
+> **Shared Component Threshold**: Move to `_shared/` when used by **3+ routes**, OR when used by **2 routes and likely to expand**. Use re-export pattern during migration. See "Cross-Route Import Migration" in Common Issues.
+
+---
+
+## 7. UI PATTERNS
+
+| Check | Pass | Notes |
+|-------|------|-------|
+| Uses shadcn/ui components (no raw HTML elements) | | |
+| Loading skeleton matches actual UI layout | | |
+| Uses CSS variables for theming (not hardcoded colors) | | |
+| Sheet pattern for detail views (if applicable) | | |
+| DataGrid pattern for tables (if applicable) | | |
+
+**Score: ___ / 5**
+
+---
+
+## 8. PERFORMANCE
+
+| Check | Pass | Notes |
+|-------|------|-------|
+| Has `loading.tsx` for route-level streaming | | |
+| `prefetch={true}` on Links for predictable navigation | | |
+| Large lists use virtualization or pagination | | |
+| Images optimized with next/image | | |
+| No unnecessary re-renders (check with React DevTools) | | |
+
+**Score: ___ / 5**
+
+> **Note**: Nested `<Suspense>` boundaries are only needed if the page has multiple independent Server Components doing async fetches. If all data is fetched in parallel in `page.tsx` and passed to client components, `loading.tsx` is sufficient.
+
+---
+
+## 9. ERROR HANDLING
+
+| Check | Pass | Notes |
+|-------|------|-------|
+| Error boundary with user-friendly message | | |
+| Graceful degradation for partial failures | | |
+| Empty states for no-data scenarios | | |
+| Toast notifications for user feedback | | |
+
+**Score: ___ / 4**
+
+---
+
+## 10. DOCUMENTATION
+
+| Check | Pass | Notes |
+|-------|------|-------|
+| CLAUDE.md with patterns and examples | | |
+| Component library documented (if route has shared components) | | |
+| Data flow explained | | |
+| No outdated documentation | | |
+
+**Score: ___ / 4**
+
+---
+
+## Summary
+
+| Section | Score | Max | Rating |
+|---------|-------|-----|--------|
+| File Structure | | 6 | |
+| Data Fetching | | 5 | |
+| Type Safety | | 5 | |
+| Server Actions | | 6 | |
+| Client Components | | 6 | |
+| Shared Infrastructure | | 5 | |
+| UI Patterns | | 5 | |
+| Performance | | 5 | |
+| Error Handling | | 4 | |
+| Documentation | | 4 | |
+| **TOTAL** | | **51** | |
+
+### Scoring Guide
+
+| Score Range | Rating | Action |
+|-------------|--------|--------|
+| 90-100% | Excellent | Minor polish only |
+| 80-89% | Good | Address high-priority issues |
+| 70-79% | Needs Improvement | Create remediation plan |
+| < 70% | Critical | Prioritize fixes immediately |
+
+---
+
+## Linear Issue Templates
+
+### Parent Issue
+
+```markdown
+## [Audit] {Route} Route Architecture
+
+### Objective
+Audit the {route} route against your project's architecture standards.
+
+### Checklist Sections (Sub-tasks)
+1. [ ] File Structure
+2. [ ] Data Fetching Patterns
+3. [ ] Type Safety
+4. [ ] Server Actions
+5. [ ] Client Components
+6. [ ] Shared Infrastructure
+7. [ ] UI Patterns
+8. [ ] Performance
+9. [ ] Error Handling
+10. [ ] Documentation
+
+### Scoring
+Target: 90%+ compliance across all sections
+```
+
+### Sub-task Template
+
+```markdown
+## [Audit] {Route}: {Section}
+
+### Checklist
+{paste section checklist}
+
+### Findings
+- Issue 1: ...
+- Issue 2: ...
+
+### Remediation
+- [ ] Fix issue 1
+- [ ] Fix issue 2
+
+### Score: ___ / {max}
+```
+
+---
+
+## Routes to Audit
+
+| Route | Priority | Status | Score |
+|-------|----------|--------|-------|
+| Analytics | P1 | ✅ Complete | 100% |
+| Leads | P3 | ✅ Complete | 72% → 100% |
+| Dashboard | P2 | ✅ Complete | 69% → 100% |
+| Calls | P2 | ✅ Complete ([PROJ]-XXX) | 98% → 100% |
+| Scheduler | P3 | ✅ Complete ([PROJ]-XXX) | 68% → 100% |
+| Settings | P3 | ✅ Complete ([PROJ]-XXX) | 84% → 100% |
+
+### Reference Implementation
+
+**Calls route** (`app/(protected)/calls/`) achieved 100% compliance and serves as the reference implementation. Key patterns:
+
+- **Modular actions folder**: `_actions/` with one action per file for complex routes
+- **Comprehensive Zod validation**: `_shared/validation/calls.schema.ts` with `validateInput()` helper
+- **Custom hooks**: State management (`useCallsData`), realtime (`useRealtimeCalls`)
+- **Sheet pattern**: Detail views using shadcn Sheet component
+- **AG Grid**: DataGrid pattern for tabular data
+- **Skeleton dimensions**: Shared constants between component and skeleton
+
+---
+
+## Common Issues and Fixes
+
+### Type Safety
+
+**Issue**: `any[]` in component props
+**Fix**: Import proper types from `/app/_shared/types/`
+
+```typescript
+// Before
+interface Props {
+  data?: any[];
+}
+
+// After
+import type { LeadRecord } from "@/app/_shared/types/leads.types";
+interface Props {
+  data?: LeadRecord[];
+}
+```
+
+### Code Duplication
+
+**Issue**: Helper functions duplicated across layers
+**Fix**: Export from shared module
+
+```typescript
+// components/shared/RepAvatar.tsx
+export { getInitials, getAvatarColor };
+
+// Layer component
+import { getInitials, getAvatarColor } from "../shared/RepAvatar";
+```
+
+### State Sprawl
+
+**Issue**: 10+ separate useState calls
+**Fix**: Consolidate into single state object
+
+```typescript
+// Before
+const [a, setA] = useState(initialA);
+const [b, setB] = useState(initialB);
+const [c, setC] = useState(initialC);
+
+// After
+interface State { a: A; b: B; c: C; }
+const [state, setState] = useState<State>({ a: initialA, b: initialB, c: initialC });
+```
+
+### Missing Validation
+
+**Issue**: No Zod validation on server actions
+**Fix**: Add validation schema and validate early
+
+```typescript
+// _shared/validation/route.schema.ts
+export const filterSchema = z.object({
+  dateRange: dateRangeSchema.optional(),
+  repIds: z.array(z.string().uuid()).optional(),
+});
+
+// actions.ts
+export async function myAction(input: SomeInput) {
+  const validation = filterSchema.safeParse(input);
+  if (!validation.success) {
+    return { success: false, error: validation.error.issues[0]?.message };
+  }
+  const { dateRange, repIds } = validation.data; // Use validated data
+  // ... rest of action
+}
+```
+
+### QueryData Union Types
+
+**Issue**: Supabase `QueryData` returns union types that include error strings, causing TypeScript errors when accessing properties
+**Fix**: Use type guards with runtime checks and double-cast through `unknown`
+
+```typescript
+// Before - causes "Property 'metadata' does not exist on type 'GenericStringError'"
+const data = lead.metadata;
+
+// After - runtime check + safe cast
+if (!lead || typeof lead !== "object") {
+  return null;
+}
+const leadData = lead as unknown as { metadata?: unknown };
+const metadata = (leadData.metadata ?? {}) as LeadMetadata;
+```
+
+### Missing useOptimistic
+
+**Issue**: UI waits for server confirmation before updating, feels sluggish
+**Fix**: Use `useOptimistic` for instant feedback with automatic rollback
+
+```typescript
+// Before - waits for server
+const handleAddNote = async () => {
+  const result = await addNoteAction(leadId, content);
+  if (result.success) {
+    // UI only updates here after server round-trip
+  }
+};
+
+// After - instant UI update with rollback on error
+const [optimisticNotes, addOptimisticNote] = useOptimistic(
+  serverNotes,
+  (current, newNote: Note) => [newNote, ...current]
+);
+
+const handleAddNote = () => {
+  const optimisticNote = { id: uuidv4(), content, created_at: new Date().toISOString() };
+  startTransition(async () => {
+    addOptimisticNote(optimisticNote); // UI updates immediately
+    const result = await addNoteAction(leadId, content);
+    if (!result.success) {
+      // Optimistic state automatically rolls back when transition ends
+      toast({ title: "Failed", variant: "destructive" });
+    }
+  });
+};
+```
+
+### Missing Graceful Degradation
+
+**Issue**: `Promise.all()` fails entirely if any single promise rejects
+**Fix**: Add `.catch()` to each promise for partial success
+
+```typescript
+// Before - one failure breaks everything
+const [leads, intents, calls] = await Promise.all([
+  getLeads(),
+  getIntents(),
+  getCalls(),
+]);
+
+// After - graceful degradation
+const [leads, intents, calls] = await Promise.all([
+  getLeads().catch((error) => {
+    logger.error({ error }, "Failed to fetch leads");
+    return []; // Return empty array instead of failing
+  }),
+  getIntents().catch((error) => {
+    logger.error({ error }, "Failed to fetch intents");
+    return [];
+  }),
+  getCalls().catch((error) => {
+    logger.error({ error }, "Failed to fetch calls");
+    return [];
+  }),
+]);
+```
+
+### Missing Error Boundary
+
+**Issue**: Route has no `error.tsx`, unhandled errors show generic Next.js error
+**Fix**: Add route-level error boundary with retry capability
+
+```typescript
+// app/(protected)/route/error.tsx
+"use client";
+import { AlertTriangle, RefreshCcw } from "lucide-react";
+import { useEffect } from "react";
+import { Button } from "@/components/ui/button";
+
+export default function RouteError({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
+  useEffect(() => {
+    console.error("[RouteError]", error);
+  }, [error]);
+
+  return (
+    <div className="flex h-[calc(100vh-4rem)] flex-col items-center justify-center gap-6 p-4">
+      <AlertTriangle className="h-12 w-12 text-destructive" />
+      <h1 className="text-2xl font-semibold">Something went wrong</h1>
+      <p className="text-muted-foreground">
+        We couldn't load this page. Please try again.
+      </p>
+      <Button onClick={reset}>
+        <RefreshCcw className="mr-2 h-4 w-4" />
+        Try Again
+      </Button>
+    </div>
+  );
+}
+```
+
+### Actions Folder Pattern
+
+**Issue**: Single `actions.ts` file becomes unwieldy with many actions
+**Fix**: Use `actions/` folder with one file per action
+
+```
+route/
+├── actions/
+│   ├── create-item.ts      # Single action per file
+│   ├── delete-item.ts
+│   ├── update-item.ts
+│   └── get-item-details.ts
+├── components/
+├── page.tsx
+└── loading.tsx
+```
+
+Each action file follows the same pattern:
+```typescript
+// actions/create-item.ts
+"use server";
+import { revalidatePath } from "next/cache";
+import { createItemSchema } from "@/app/_shared/validation/items.schema";
+import { itemsRepository } from "@/app/_shared/repositories/items.repository";
+
+export async function createItemAction(input: CreateItemInput) {
+  const validation = createItemSchema.safeParse(input);
+  if (!validation.success) {
+    return { success: false, error: validation.error.issues[0]?.message };
+  }
+
+  try {
+    const item = await itemsRepository.create(validation.data);
+    revalidatePath("/items");
+    return { success: true, data: item };
+  } catch (error) {
+    return { success: false, error: "Failed to create item" };
+  }
+}
+```
+
+### Cross-Route Import Migration (Re-export Pattern)
+
+**Issue**: Components used by multiple routes are imported across route boundaries
+**Fix**: Move to `_shared/` and create re-exports for backward compatibility
+
+```typescript
+// Step 1: Move component to _shared
+// Before: app/(protected)/calls/components/CallItem.tsx
+// After:  app/_shared/components/calls/CallItem.tsx
+
+// Step 2: Create re-export at original location for backward compatibility
+// app/(protected)/calls/components/CallItem.tsx
+export { CallItem } from "@/app/_shared/components/calls/CallItem";
+```
+
+This pattern enables gradual migration without breaking existing imports.
+
+**Deep Dependency Check**: Before moving a component, trace its imports. If it depends on route-specific types/components (like `../types`), you may need to move those first or defer the refactor as tech debt.
+
+### Draft Pattern vs Immediate Pattern (useOptimistic Decision)
+
+**Issue**: `useOptimistic` applied blindly to all components, even batch-edit forms
+**Analysis**: Not all components benefit from optimistic updates. Identify the pattern first:
+
+```typescript
+// DRAFT PATTERN - Local edits, explicit save (NO useOptimistic needed)
+// Example: ObjectionsSection - users edit multiple items, then click "Save Changes"
+const [options, setOptions] = useState(initialOptions);
+const [hasChanges, setHasChanges] = useState(false);
+
+const handleSave = () => {
+  startTransition(async () => {
+    await saveAction(options); // Save entire batch
+  });
+};
+// ✅ useTransition only - changes are local until explicit save
+
+// IMMEDIATE PATTERN - Each action is a server call (USE useOptimistic)
+// Example: UnmatchedPaymentsQueue - each "Link" or "Dismiss" calls server
+const [optimisticPayments, removeOptimisticPayment] = useOptimistic(
+  payments,
+  (state, paymentId: string) => state.filter((p) => p.id !== paymentId)
+);
+
+const handleLinkToLead = (paymentId: string, leadId: string) => {
+  startTransition(async () => {
+    removeOptimisticPayment(paymentId); // Instant removal
+    const result = await linkPaymentAction(paymentId, leadId);
+    if (result.success) {
+      setPayments((prev) => prev.filter((p) => p.id !== paymentId));
+    }
+    // Auto-reverts if setPayments wasn't called
+  });
+};
+// ✅ useOptimistic for instant feedback with auto-rollback
+```
+
+### Ownership Verification Functions
+
+**Issue**: Server actions verify resource ownership with inline queries
+**Fix**: Add `verify*Ownership` functions to repositories for reusability
+
+```typescript
+// _shared/repositories/payments.repository.ts
+export async function verifyPaymentOwnership(
+  supabase: SupabaseClient<Database>,
+  paymentId: string,
+  organizationId: string,
+): Promise<boolean> {
+  const payment = await getPaymentById(supabase, paymentId);
+  return payment !== null && payment.organization_id === organizationId;
+}
+
+// Server action
+const paymentOwned = await paymentsRepository.verifyPaymentOwnership(
+  supabase,
+  paymentId,
+  orgId,
+);
+if (!paymentOwned) {
+  return { success: false, error: "Payment not found" };
+}
+```
+
+### Read-Only vs Mutation Server Actions
+
+**Issue**: Confusion about when to use structured `{ success, data?, error? }` response
+**Clarification**: The structured response pattern is **for mutations only**
+
+```typescript
+// READ-ONLY action - can return data directly
+export async function getDashboardData(dateRange?: DateRange): Promise<DashboardData> {
+  try {
+    const data = await repository.get(dateRange);
+    return data; // Direct return is fine for read-only
+  } catch (error) {
+    return getEmptyData(); // Graceful degradation
+  }
+}
+
+// MUTATION action - use structured response
+export async function updateCallOutcome(callId: string, outcome: Outcome) {
+  try {
+    const result = await repository.update(callId, { outcome });
+    revalidatePath('/calls');
+    return { success: true, data: result };
+  } catch (error) {
+    return { success: false, error: "Failed to update" };
+  }
+}
+```
+
+### Skeleton Dimension Constants
+
+**Issue**: Loading skeletons don't match UI layout, causing layout shift (CLS)
+**Fix**: Create dimension constants shared between component and skeleton
+
+```typescript
+// CallItem.dimensions.ts
+export const CALL_ITEM_DIMENSIONS = {
+  padding: "px-4 py-3",
+  gap: "gap-3",
+  container: "min-h-[60px]",
+  leftSide: {
+    gap: "gap-3",
+    sidebar: "w-1 h-12 rounded-full shrink-0",
+  },
+  // ... more dimensions
+};
+
+// CallItem.tsx
+import { CALL_ITEM_DIMENSIONS as d } from "./CallItem.dimensions";
+<div className={`flex items-center ${d.gap} ${d.container}`}>
+
+// CallItem.skeleton.tsx
+import { CALL_ITEM_DIMENSIONS as d } from "./CallItem.dimensions";
+<div className={`flex items-center ${d.gap} ${d.container}`}> // Same dimensions!
+```
+
+### Graceful Validation with Defaults
+
+**Issue**: Invalid input causes server action to fail entirely
+**Fix**: Use `safeParse` and fall back to sensible defaults
+
+```typescript
+export async function getData(dateRange?: DateRange) {
+  // Use safeParse to avoid throwing on invalid input
+  let effectiveRange = getDefaultDateRange();
+
+  if (dateRange) {
+    const validated = dateRangeSchema.safeParse(dateRange);
+    if (!validated.success) {
+      logger.warn({ errors: validated.error.flatten() }, "Invalid input, using defaults");
+      // Don't throw - use defaults instead
+    } else {
+      effectiveRange = validated.data;
+    }
+  }
+
+  return repository.get(effectiveRange);
+}
+```
+
+### Contextual Empty States ([PROJ]-XXX)
+
+**Issue**: Grid/list components show "Create your first item" when search returns no results or when filtering by tab
+**Fix**: Check the reason for empty state and show contextual messaging
+
+```typescript
+// Before - generic empty state
+if (items.length === 0) {
+  return <EmptyData title="Create your first item" />;
+}
+
+// After - contextual empty states
+if (items.length === 0) {
+  // Case 1: Search filter with no results
+  if (hasSearchFilter && totalConfigCount > 0) {
+    return <EmptyData title="No results found" icon={<Search />} />;
+  }
+
+  // Case 2: Tab filter with no items (e.g., "Disabled" tab)
+  if (activeTab === "disabled" && totalConfigCount > 0) {
+    return <EmptyData title="No disabled items" />;
+  }
+
+  // Case 3: Prerequisites not met
+  if (!hasPrerequisite) {
+    return <EmptyData title="Complete setup first" action={<SetupButton />} />;
+  }
+
+  // Case 4: True empty state - no items exist
+  return <EmptyData title="Create your first item" action={<CreateButton />} />;
+}
+```
+
+Props needed from parent component:
+- `totalConfigCount: number` - Total items before filtering
+- `hasSearchFilter: boolean` - Whether search is active
+- `activeTab: "live" | "disabled"` - Current tab selection
+
+### React Query/SWR Violations ([PROJ]-XXX)
+
+**Issue**: Codebase contains hooks using React Query or SWR despite codebase standards prohibiting them
+**Detection**: Search for `@tanstack/react-query`, `useSWR`, `useQuery`
+**Fix**: Remove unused hooks entirely, or refactor to use server actions + `useTransition`
+
+```bash
+# Detection command
+grep -r "react-query\|useSWR\|@tanstack" --include="*.ts" --include="*.tsx" app/
+```
+
+```typescript
+// Before - React Query (PROHIBITED)
+import { useQuery } from "@tanstack/react-query";
+
+const { data, isLoading } = useQuery({
+  queryKey: ["dashboard", dateRange],
+  queryFn: () => fetchDashboardData(dateRange),
+});
+
+// After - Server Action + useTransition
+import { getDashboardData } from "./actions";
+
+const [data, setData] = useState<DashboardData>(initialData);
+const [isPending, startTransition] = useTransition();
+
+const refresh = () => {
+  startTransition(async () => {
+    const newData = await getDashboardData(dateRange);
+    setData(newData);
+  });
+};
+```
+
+### validateInput Helper Pattern ([PROJ]-XXX)
+
+**Issue**: Repetitive Zod validation boilerplate in every server action
+**Fix**: Create reusable `validateInput()` helper in schema file
+
+```typescript
+// _shared/validation/calls.schema.ts
+export function validateInput<T extends z.ZodSchema>(
+  schema: T,
+  input: unknown,
+): { success: true; data: z.infer<T> } | { success: false; error: string } {
+  const result = schema.safeParse(input);
+  if (!result.success) {
+    const firstIssue = result.error.issues[0];
+    const path = firstIssue?.path.join(".") || "input";
+    const message = firstIssue?.message || "Validation failed";
+    return { success: false, error: `${path}: ${message}` };
+  }
+  return { success: true, data: result.data };
+}
+
+// Usage in server action
+export async function updateCallOutcome(input: UpdateCallOutcomeInput) {
+  const validation = validateInput(updateCallOutcomeSchema, input);
+  if (!validation.success) {
+    logger.warn({ error: validation.error, input }, "Invalid input");
+    return { success: false, error: validation.error };
+  }
+
+  // Use validation.data (validated & typed)
+  const result = await repository.update(validation.data);
+  // ...
+}
+```
+
+### Dead Code Detection
+
+**Issue**: Unused hooks, components, or imports bloating the codebase
+**Detection**: During audits, check if all files in route are actually imported
+
+```bash
+# Find files that might be unused
+# Look for components never imported elsewhere
+grep -rL "ComponentName" app/ --include="*.tsx" | grep ComponentName
+```
+
+**Action**: Remove unused code rather than leaving tech debt. During audits:
+1. Check `hooks/` folder - are all hooks imported in components?
+2. Check `components/` folder - are all components rendered?
+3. Check CLAUDE.md - does it mention components that don't exist or aren't used?

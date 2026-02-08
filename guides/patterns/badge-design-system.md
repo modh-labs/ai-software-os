@@ -1,0 +1,473 @@
+---
+title: "Badge Design System"
+description: "Badge design system prioritizing clarity and consistency with a clean, minimalist approach."
+tags: ["react", "typescript", "patterns"]
+category: "patterns"
+author: "Imran Gardezi"
+publishable: true
+---
+# Badge Design System Guide
+
+## Philosophy
+
+Badges provide quick visual context for data across the application. Our badge design system prioritizes **clarity and consistency** with a clean, minimalist approach that matches the audit log table baseline.
+
+### Core Principles
+
+1. **No Animations** - Static display for fast visual scanning
+2. **No Hover Effects** - Badges are informational, not interactive
+3. **No Shadows** - Clean borders for subtle definition
+4. **Semantic Colors** - Meaningful color choices that align with intent
+5. **Dark Mode Support** - Proper contrast in both light and dark themes
+6. **Icon + Text** - Icons provide visual context, text provides clarity
+
+---
+
+## Badge Types
+
+### 1. Status Badges (Semantic Colors)
+
+Display the state of an object using transparent color overlays.
+
+**Pattern:**
+```tsx
+<div className="inline-flex items-center gap-1.5 rounded-md bg-[color]-500/15 px-2.5 py-1 text-xs border border-border/50 font-medium">
+  <Icon className="size-3.5 shrink-0 text-[color]-700 dark:text-[color]-400" />
+  <span className="text-[color]-700 dark:text-[color]-400">{label}</span>
+</div>
+```
+
+**Examples:**
+
+- **Success Status** (Won, Verified, Confirmed, Completed)
+  - Background: `bg-green-500/15`
+  - Text: `text-green-700 dark:text-green-400`
+  - Icon: CheckCircle, Check, TrendingUp
+
+- **Error Status** (Lost, Cancelled, Declined)
+  - Background: `bg-red-500/15`
+  - Text: `text-red-700 dark:text-red-400`
+  - Icon: XCircle, X, TrendingDown
+
+- **Warning Status** (Pending, Follow-Up, No Show)
+  - Background: `bg-yellow-500/15`
+  - Text: `text-yellow-700 dark:text-yellow-400`
+  - Icon: AlertCircle, Clock
+
+- **Info Status** (Scheduled, Rescheduled, Qualified)
+  - Background: `bg-blue-500/15`
+  - Text: `text-blue-700 dark:text-blue-400`
+  - Icon: Calendar, Info, Sparkles
+
+**Usage:**
+```tsx
+import { StatusBadge } from "@/app/_shared/components/calls/StatusBadge";
+
+export function CallCard({ call }) {
+  return (
+    <div>
+      {/* Displays Won status in green */}
+      <StatusBadge outcome={call.outcome} />
+    </div>
+  );
+}
+```
+
+### 2. Contact Badges (Neutral Background)
+
+Display contact methods and external links with action intent.
+
+**Pattern:**
+```tsx
+<a href={href} className="inline-flex items-center gap-1.5 rounded-md bg-muted/60 px-2.5 py-1 text-xs border border-border/50 font-medium text-foreground">
+  <Icon className="size-3.5 shrink-0" />
+  <span>{label}</span>
+</a>
+```
+
+**Component Types:**
+- `EmailBadge` - Links to mailto
+- `PhoneBadge` - Links to tel
+- `BookingLinkBadge` - Links to scheduler or modal
+- `MeetingLinkBadge` - Links to Zoom/Teams meeting
+
+**Usage:**
+```tsx
+import { EmailBadge, PhoneBadge } from "@/app/_shared/components/badges";
+
+export function LeadCard({ lead }) {
+  return (
+    <div className="flex gap-2">
+      <EmailBadge email={lead.email} />
+      <PhoneBadge phone={lead.phone} />
+    </div>
+  );
+}
+```
+
+### 3. Category Badges (Muted Background)
+
+Display non-status information like traffic source, lead category, etc.
+
+**Pattern:**
+```tsx
+<div className="inline-flex items-center gap-1.5 rounded-md bg-muted/60 px-2.5 py-1 text-xs border border-border/50 font-medium text-foreground">
+  {label}
+</div>
+```
+
+**Examples:**
+- Traffic source: Cold, Referral, Hot, Organic, Paid
+- Lead category: Enterprise, Mid-market, SMB
+- Source: Inbound, Outbound, Referral
+
+**Usage:**
+```tsx
+import { TrafficSourceBadge } from "@/app/(protected)/calls/components/badges/TrafficSourceBadge";
+
+export function OpportunityCard({ opportunity }) {
+  return (
+    <TrafficSourceBadge source={opportunity.traffic_source} />
+  );
+}
+```
+
+---
+
+## Color Mapping
+
+### Semantic Colors
+
+| Meaning | Color | Background | Text | Dark Text |
+|---------|-------|-----------|------|-----------|
+| Success/Won | Green | `bg-green-500/15` | `text-green-700` | `dark:text-green-400` |
+| Error/Lost | Red | `bg-red-500/15` | `text-red-700` | `dark:text-red-400` |
+| Warning/Pending | Yellow | `bg-yellow-500/15` | `text-yellow-700` | `dark:text-yellow-400` |
+| Info/Upcoming | Blue | `bg-blue-500/15` | `text-blue-700` | `dark:text-blue-400` |
+| Action/Hot | Purple | `bg-purple-500/15` | `text-purple-700` | `dark:text-purple-400` |
+| Alternative/Warm | Orange | `bg-orange-500/15` | `text-orange-700` | `dark:text-orange-400` |
+| Neutral/Default | Muted | `bg-muted/60` | `text-muted-foreground` | - |
+
+### Dark Mode Opacity Pattern
+
+- **Light backgrounds:** `[color]-500/15` (15% opacity)
+- **Dark text:** `dark:text-[color]-400` (lighter shade for contrast)
+
+This ensures:
+- Light theme: Subtle tinted background with dark semantic text
+- Dark theme: Appropriate contrast without harsh colors
+
+---
+
+## Standard Styling
+
+### Consistent Dimensions
+
+All badges follow these measurements:
+
+```
+Padding:       px-2.5 py-1 (or py-0.5 for compact)
+Rounded:       rounded-md (medium border radius, not full)
+Border:        border border-border/50 (subtle, always present)
+Font:          text-xs font-medium (or font-semibold for emphasis)
+Gap:           gap-1.5 (icon to text spacing)
+Icon Size:     size-3.5 shrink-0 (prevent icon squishing)
+Alignment:     inline-flex items-center (vertical centering)
+```
+
+### Bad Examples to Avoid
+
+❌ **Solid backgrounds with white text:**
+```tsx
+// DON'T DO THIS
+className="bg-green-600 text-white" // No contrast in dark mode
+```
+
+❌ **Hover effects:**
+```tsx
+// DON'T DO THIS
+className="hover:bg-green-500/20 hover:border-green-700" // Inconsistent interaction
+```
+
+❌ **Transitions:**
+```tsx
+// DON'T DO THIS
+className="transition-colors hover:..." // Unnecessary animation
+```
+
+❌ **Shadows:**
+```tsx
+// DON'T DO THIS
+className="shadow-sm shadow-black/10" // Creates visual weight
+```
+
+❌ **Inconsistent padding/sizing:**
+```tsx
+// DON'T DO THIS
+className="px-3 py-2 text-sm" // Breaks uniformity
+```
+
+---
+
+## Usage Guidelines
+
+### When to Use Badges
+
+✅ **Use badges for:**
+- Call outcomes (Won, Lost, Pending)
+- RSVP statuses (Confirmed, Declined, Unconfirmed)
+- Payment statuses (Verified, Pending, Unmatched)
+- Lead sources (Cold, Referral, Inbound)
+- Contact methods (Email, Phone, Meeting link)
+- Quick status indicators
+- Categorical information
+
+❌ **Don't use badges for:**
+- Primary actions (use Button instead)
+- Form inputs or selections (use Select/Checkbox instead)
+- Large amounts of text (use descriptions instead)
+- Real-time notifications (use Toast instead)
+
+### Import Patterns
+
+**Always import from `_shared` locations:**
+
+```tsx
+// ✅ CORRECT - Use shared locations
+import { StatusBadge } from "@/app/_shared/components/calls/StatusBadge";
+import { RSVPStatusBadge } from "@/app/_shared/components/badges/RSVPStatusBadge";
+import { EmailBadge } from "@/app/_shared/components/badges/EmailBadge";
+
+// ❌ WRONG - Don't use local re-exports
+import { StatusBadge } from "../StatusBadge"; // Deleted for consolidation
+```
+
+### Accessibility
+
+1. **Icon + Text Always** - Never badge-only with icon; always include text label
+2. **Color Contrast** - Semantic colors meet WCAG AA standards
+3. **Readable Text** - `text-xs` with `font-medium` ensures legibility
+4. **No Color-Only Information** - Text label supports color-blind users
+
+### Dark Mode
+
+Test all badges in dark mode. The semantic text colors automatically provide good contrast:
+
+```tsx
+// Light mode: dark green text on light green background
+<div className="bg-green-500/15 text-green-700">Won</div>
+
+// Dark mode: light green text on transparent
+<div className="bg-green-500/15 dark:text-green-400">Won</div>
+```
+
+---
+
+## Component Reference
+
+### Status Badges
+
+**`StatusBadge`** - Call outcomes
+```tsx
+import { StatusBadge } from "@/app/_shared/components/calls/StatusBadge";
+
+<StatusBadge outcome="closed" />
+<StatusBadge outcome="lost" />
+<StatusBadge outcome="upcoming" />
+```
+
+**`RSVPStatusBadge`** - Calendar RSVP status
+```tsx
+import { RSVPStatusBadge } from "@/app/_shared/components/badges/RSVPStatusBadge";
+
+<RSVPStatusBadge status="yes" size="md" />
+<RSVPStatusBadge status="maybe" size="sm" />
+```
+
+**`PaymentStatusBadge`** - Payment verification
+```tsx
+import { PaymentStatusBadge } from "@/app/_shared/components/payment-status-badge";
+
+<PaymentStatusBadge status="verified" amountCents={50000} />
+<PaymentStatusBadge status="pending" compact />
+```
+
+### Contact Badges
+
+**`EmailBadge`**
+```tsx
+import { EmailBadge } from "@/app/_shared/components/badges/EmailBadge";
+
+<EmailBadge email="user@example.com" />
+```
+
+**`PhoneBadge`**
+```tsx
+import { PhoneBadge } from "@/app/_shared/components/badges/PhoneBadge";
+
+<PhoneBadge phone="+1-415-555-0116" />
+```
+
+**`BookingLinkBadge`**
+```tsx
+import { BookingLinkBadge } from "@/app/_shared/components/badges/BookingLinkBadge";
+
+<BookingLinkBadge title="Intake Call" slug="intake-call" />
+<BookingLinkBadge title="Demo" onClick={handleClick} />
+```
+
+**`MeetingLinkBadge`**
+```tsx
+import { MeetingLinkBadge } from "@/app/_shared/components/badges/MeetingLinkBadge";
+
+<MeetingLinkBadge url="https://meet.google.com/..." />
+```
+
+### Category Badges
+
+**`CallStatusBadge`** - Call status (scheduled, completed, cancelled)
+```tsx
+import { CallStatusBadge } from "@/app/(protected)/calls/components/badges/CallStatusBadge";
+
+<CallStatusBadge status="scheduled" />
+```
+
+**`DealStatusBadge`** - Deal/opportunity status
+```tsx
+import { DealStatusBadge } from "@/app/(protected)/calls/components/badges/DealStatusBadge";
+
+<DealStatusBadge status="won" />
+```
+
+**`TrafficSourceBadge`** - Lead source/traffic source
+```tsx
+import { TrafficSourceBadge } from "@/app/(protected)/calls/components/badges/TrafficSourceBadge";
+
+<TrafficSourceBadge source="cold" />
+```
+
+---
+
+## Creating New Badges
+
+### Template
+
+When creating a new badge component, follow this template:
+
+```tsx
+import { IconType } from "lucide-react";
+
+interface CustomBadgeProps {
+  status: string;
+  className?: string;
+}
+
+export function CustomBadge({ status, className = "" }: CustomBadgeProps) {
+  const getConfig = (status: string) => {
+    switch (status.toLowerCase()) {
+      case "active":
+        return {
+          className: "bg-blue-500/15 text-blue-700 dark:text-blue-400 border-border/50",
+          label: "Active",
+          icon: CheckCircle,
+        };
+      case "inactive":
+        return {
+          className: "bg-muted/60 text-muted-foreground border-border/50",
+          label: "Inactive",
+          icon: Circle,
+        };
+      default:
+        return {
+          className: "bg-muted/60 text-muted-foreground border-border/50",
+          label: status,
+          icon: Circle,
+        };
+    }
+  };
+
+  const config = getConfig(status);
+  const Icon = config.icon;
+
+  return (
+    <div className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs border font-medium ${config.className} ${className}`}>
+      <Icon className="size-3.5 shrink-0" />
+      <span>{config.label}</span>
+    </div>
+  );
+}
+```
+
+### Checklist
+
+- [ ] Component placed in `_shared/components/badges/` or route-specific folder
+- [ ] Uses semantic color overlay pattern (`bg-[color]-500/15`)
+- [ ] Includes dark mode text colors (`dark:text-[color]-400`)
+- [ ] Icon size is `size-3.5` with `shrink-0`
+- [ ] Padding is `px-2.5 py-1`
+- [ ] Border is `border border-border/50`
+- [ ] No hover effects, transitions, or shadows
+- [ ] Exported from component and shared if used by 3+ routes
+- [ ] Includes JSDoc with @example
+- [ ] Tested in light and dark modes
+
+---
+
+## FAQ
+
+**Q: Why no hover effects?**
+Badges are informational, not interactive. They should feel static and fast to scan. Hover effects create uncertainty about interactivity.
+
+**Q: Why transparent overlays instead of solid backgrounds?**
+Transparent overlays maintain readability in dark mode and feel lighter/more modern. They also align with our design system's preference for subtlety.
+
+**Q: Can I create a custom color?**
+Only if it's truly semantic (e.g., domain-specific meaning). Add it to this guide and ensure dark mode text contrast.
+
+**Q: What about accessibility?**
+- Always pair color with text label
+- Use semantic colors (red=error, green=success)
+- Ensure text meets WCAG AA contrast ratios
+- Test with color-blind simulators
+
+**Q: Can I add metadata/tooltips?**
+Yes, use shadcn `<Tooltip>` component. See `PaymentStatusBadge` for reference.
+
+---
+
+## Audit Checklist
+
+Use this before shipping badge changes:
+
+- [ ] Component uses transparent overlay pattern
+- [ ] Dark mode text colors are correct (`dark:text-[color]-400`)
+- [ ] No hover effects in className
+- [ ] No `transition-` classes
+- [ ] No `shadow-` classes
+- [ ] Icon size is exactly `size-3.5`
+- [ ] Icon has `shrink-0` to prevent squishing
+- [ ] Padding is `px-2.5 py-1` (or compact variant)
+- [ ] Border is `border border-border/50`
+- [ ] Component is located in `_shared` if used by multiple routes
+- [ ] Imports are from `_shared` locations, not relative paths
+- [ ] Typecheck passes with zero errors
+- [ ] Looks good in light and dark modes
+
+---
+
+## Related Files
+
+- **`_shared/components/calls/StatusBadge.tsx`** - Call outcome badge (reference implementation)
+- **`_shared/components/badges/`** - All shared badge components
+- **`(protected)/calls/components/badges/`** - Calls-specific badges
+- **`(protected)/settings/audit-trail/components/AuditTrailDataGrid.tsx`** - Audit log badges (baseline)
+
+---
+
+## Version History
+
+| Date | Change | Author |
+|------|--------|--------|
+| 2026-01-11 | Initial badge design system standardization | Claude |
+| 2026-01-11 | Migrated to transparent overlays, removed shadows/hover | Claude |
+| 2026-01-11 | Consolidated imports to _shared locations | Claude |

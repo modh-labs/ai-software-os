@@ -1,0 +1,416 @@
+---
+title: "Security Standards"
+description: "Security standards for all apps in the monorepo."
+tags: ["security", "architecture"]
+category: "standards"
+author: "Imran Gardezi"
+publishable: true
+---
+# Security Standards
+
+> **Applies to:** All apps in the monorepo (web, admin, future apps)
+> **Last Updated:** January 2026
+
+This document defines security standards for all applications in your monorepo. Every app MUST implement these patterns for consistent protection against common vulnerabilities.
+
+---
+
+## HTTP Security Headers
+
+### Required Headers
+
+Every `next.config.mjs` MUST include these security headers:
+
+```typescript
+async headers() {
+  return [
+    {
+      source: "/(.*)",
+      headers: [
+        // Prevent MIME type sniffing
+        {
+          key: "X-Content-Type-Options",
+          value: "nosniff",
+        },
+        // Prevent clickjacking attacks
+        {
+          key: "X-Frame-Options",
+          value: "DENY",
+        },
+        // XSS protection (legacy browsers)
+        {
+          key: "X-XSS-Protection",
+          value: "1; mode=block",
+        },
+        // Control referrer information
+        {
+          key: "Referrer-Policy",
+          value: "origin-when-cross-origin",
+        },
+      ],
+    },
+  ];
+}
+```
+
+### Header Explanations
+
+| Header | Purpose | Why DENY/nosniff |
+|--------|---------|------------------|
+| `X-Content-Type-Options` | Prevents browser from guessing MIME types | Stops XSS via malicious file uploads |
+| `X-Frame-Options` | Blocks embedding in iframes | Prevents clickjacking attacks |
+| `X-XSS-Protection` | Enables browser XSS filter | Legacy protection for older browsers |
+| `Referrer-Policy` | Controls URL sharing in requests | Limits data leakage to third parties |
+
+---
+
+## Authentication (Clerk)
+
+### Multi-Tenant Architecture
+
+- Clerk handles authentication + organization management
+- JWT contains `org_id` for multi-tenant isolation
+- Supabase RLS reads `org_id` from JWT automatically
+
+### Protected Routes
+
+```typescript
+// proxy.ts - Clerk handles auth
+import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
+
+const isPublicRoute = createRouteMatcher([
+  '/',
+  '/sign-in(.*)',
+  '/sign-up(.*)',
+  '/api/webhooks/(.*)',
+]);
+
+export default clerkMiddleware(async (auth, req) => {
+  if (!isPublicRoute(req)) {
+    await auth.protect();
+  }
+});
+```
+
+### Organization Data
+
+**CRITICAL:** Always fetch organization data from Clerk (single source of truth):
+
+```typescript
+// RIGHT - Use Clerk for org data
+import { getOrganizationName } from '@/app/_shared/lib/clerk/organization';
+const name = await getOrganizationName(orgId);
+
+// WRONG - Store org data in your database
+const org = await supabase.from('organizations').select('name').single();
+```
+
+---
+
+## Row Level Security (RLS)
+
+### Philosophy
+
+RLS is the **primary security boundary** for data isolation. Trust it.
+
+### Standard Organization Policy
+
+Every table with user data MUST have this RLS policy:
+
+```sql
+-- Enable RLS on table
+ALTER TABLE "public"."table_name" ENABLE ROW LEVEL SECURITY;
+
+-- Organization isolation policy
+CREATE POLICY "organization_isolation" ON "public"."table_name"
+FOR ALL USING (
+  organization_id = (auth.jwt() ->> 'org_id')::text
+);
+```
+
+### Role-Based Access (When Needed)
+
+```sql
+-- Admin-only access
+CREATE POLICY "admin_full_access" ON "public"."sensitive_table"
+FOR ALL USING (
+  organization_id = (auth.jwt() ->> 'org_id')::text
+  AND (auth.jwt() ->> 'org_role') = 'org:admin'
+);
+
+-- Read-only for members
+CREATE POLICY "member_read_only" ON "public"."sensitive_table"
+FOR SELECT USING (
+  organization_id = (auth.jwt() ->> 'org_id')::text
+);
+```
+
+### Service Role (Webhooks Only)
+
+Service role bypasses RLS. Use it **ONLY** for webhooks:
+
+```typescript
+// ONLY in webhook handlers
+import { createServiceRoleClient } from '@/app/_shared/lib/supabase/server';
+
+export async function POST(req: Request) {
+  const supabase = await createServiceRoleClient();
+  // Now bypasses RLS - use carefully!
+}
+```
+
+### DON'T Duplicate RLS Checks
+
+```typescript
+// WRONG - Redundant with RLS
+'use server'
+export async function deleteCall(id: string) {
+  const auth = await getAuth();
+  const call = await callsRepository.getById(id);
+
+  // This check is already done by RLS!
+  if (call.organization_id !== auth.orgId) {
+    throw new Error('Unauthorized');
+  }
+
+  await callsRepository.remove(id);
+}
+
+// RIGHT - Trust RLS
+'use server'
+export async function deleteCall(id: string) {
+  // If RLS rejects, Supabase throws automatically
+  await callsRepository.remove(id);
+}
+```
+
+---
+
+## Webhook Security
+
+### Signature Verification
+
+**ALWAYS verify webhook signatures before processing:**
+
+```typescript
+// Stripe
+const event = stripe.webhooks.constructEvent(
+  body,           // Raw body (use req.text(), not req.json())
+  signature,      // stripe-signature header
+  webhookSecret   // Process env or per-org secret
+);
+
+// Clerk
+const payload = await svix.verify(body, headers);
+
+// Nylas
+const isValid = verifyNylasSignature(body, signature, secret);
+```
+
+### Replay Protection
+
+Reject stale events:
+
+```typescript
+const MAX_EVENT_AGE_SECONDS = 300; // 5 minutes
+
+const eventAge = Math.floor(Date.now() / 1000) - event.created;
+if (eventAge > MAX_EVENT_AGE_SECONDS) {
+  return NextResponse.json({ error: "Event too old" }, { status: 400 });
+}
+```
+
+### Raw Body Requirement
+
+**CRITICAL:** Use `req.text()` for webhooks, not `req.json()`:
+
+```typescript
+// RIGHT - Raw body for signature verification
+const body = await req.text();
+const event = stripe.webhooks.constructEvent(body, signature, secret);
+
+// WRONG - Parsed JSON breaks signature
+const body = await req.json();  // Don't do this!
+```
+
+---
+
+## Environment Variables
+
+### Never Commit Secrets
+
+The monorepo has lint-staged protection:
+
+```json
+{
+  "*.env*": [
+    "echo '🚨 ERROR: Environment files should not be committed!' && exit 1"
+  ]
+}
+```
+
+### Required Variables
+
+| Variable | Purpose | Where Used |
+|----------|---------|------------|
+| `CLERK_SECRET_KEY` | Server auth | All apps |
+| `CLERK_WEBHOOK_SECRET` | Webhook verification | Web |
+| `SUPABASE_SERVICE_ROLE_KEY` | Bypass RLS (webhooks) | Web |
+| `STRIPE_WEBHOOK_SECRET` | Payment verification | Web |
+| `NYLAS_WEBHOOK_SECRET` | Calendar verification | Web |
+
+### Client-Safe Variables
+
+Only `NEXT_PUBLIC_*` variables are exposed to the browser:
+
+```bash
+# Safe - exposed to client
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_...
+NEXT_PUBLIC_SUPABASE_URL=https://...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
+
+# Secret - server only
+CLERK_SECRET_KEY=sk_...
+SUPABASE_SERVICE_ROLE_KEY=eyJ...
+```
+
+---
+
+## Input Validation
+
+### Zod Schemas for All User Input
+
+Every server action MUST validate input with Zod:
+
+```typescript
+// _shared/validation/leads.schema.ts
+import { z } from 'zod';
+
+export const createLeadSchema = z.object({
+  name: z.string().min(1).max(200),
+  email: z.string().email(),
+  phone: z.string().optional(),
+  source: z.enum(['web', 'referral', 'api']),
+});
+
+export type CreateLeadInput = z.infer<typeof createLeadSchema>;
+```
+
+```typescript
+// Server action usage
+'use server'
+import { createLeadSchema } from '@/app/_shared/validation/leads.schema';
+
+export async function createLead(data: unknown) {
+  const validated = createLeadSchema.parse(data);
+  // Now safe to use validated data
+}
+```
+
+### SQL Injection Prevention
+
+**Always use parameterized queries** (Supabase handles this automatically):
+
+```typescript
+// RIGHT - Parameterized (automatic)
+const { data } = await supabase
+  .from('calls')
+  .select('*')
+  .eq('id', userProvidedId);  // Safe
+
+// WRONG - String concatenation (never do this)
+const { data } = await supabase
+  .rpc('get_call', { query: `id = '${userProvidedId}'` });  // Vulnerable!
+```
+
+---
+
+## Sensitive Data Handling
+
+### PII Protection
+
+Sentry config MUST disable PII:
+
+```typescript
+Sentry.init({
+  // REQUIRED: Privacy protection
+  sendDefaultPii: false,
+});
+```
+
+### Data Encryption
+
+For sensitive credentials (API keys, tokens):
+
+```typescript
+import { encrypt, decrypt } from '@/app/_shared/lib/encryption/credentials';
+
+// Store encrypted
+const encryptedKey = encrypt(apiKey, process.env.INTEGRATION_ENCRYPTION_KEY!);
+
+// Retrieve and decrypt
+const apiKey = decrypt(encryptedKey, process.env.INTEGRATION_ENCRYPTION_KEY!);
+```
+
+---
+
+## CORS and API Protection
+
+### Next.js API Routes
+
+API routes are same-origin by default. For webhooks that need external access:
+
+```typescript
+export async function POST(req: Request) {
+  // Webhooks don't need CORS - they're server-to-server
+  return NextResponse.json({ received: true });
+}
+```
+
+### Rate Limiting
+
+Use Upstash Redis for rate limiting:
+
+```typescript
+import { Ratelimit } from '@upstash/ratelimit';
+import { kv } from '@/app/_shared/lib/redis';
+
+const ratelimit = new Ratelimit({
+  redis: kv,
+  limiter: Ratelimit.slidingWindow(10, '10s'), // 10 requests per 10 seconds
+});
+
+export async function POST(req: Request) {
+  const ip = req.headers.get('x-forwarded-for') || 'anonymous';
+  const { success, remaining } = await ratelimit.limit(ip);
+
+  if (!success) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+  }
+  // Continue processing
+}
+```
+
+---
+
+## Checklist for New Apps
+
+When creating a new app in the monorepo:
+
+- [ ] Add security headers to `next.config.mjs`
+- [ ] Configure Clerk middleware for protected routes
+- [ ] Enable RLS on all tables with user data
+- [ ] Add organization isolation policies
+- [ ] Set `sendDefaultPii: false` in Sentry config
+- [ ] Add webhook signature verification for external integrations
+- [ ] Create Zod schemas in `_shared/validation/` for all inputs
+- [ ] Configure rate limiting for public endpoints
+- [ ] Verify no `.env` files are committed
+
+---
+
+## Related Documentation
+
+- [Observability Standards](./observability.md) - Error tracking, logging
+- [Database Standards](./database.md) - RLS patterns, migrations
+- [Webhook Patterns](../patterns/webhook-patterns.md) - Detailed webhook security

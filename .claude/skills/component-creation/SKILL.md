@@ -1,0 +1,306 @@
+---
+name: component-creation
+description: Create UI components following your project's shadcn/ui patterns. Use when building components, styling, theming, tables, forms, DataGrid, AG Grid, or creating Sheet detail views. Enforces shadcn components, CSS variables, DataGrid patterns, and Sheet toggle conventions.
+allowed-tools: Read, Grep, Glob
+---
+
+# Component Creation Skill
+
+## When This Skill Activates
+
+This skill automatically activates when you:
+- Create or modify React components
+- Add styling or theming
+- Work with data tables (DataGrid/AG Grid)
+- Create expandable detail views (Sheets)
+- Discuss UI patterns
+
+## Core Rules (MUST Follow)
+
+### 1. NEVER Use Raw HTML Elements
+
+**ALWAYS use shadcn/ui components** from `@/components/ui/`:
+
+```typescript
+// ❌ WRONG - Raw HTML elements
+<button className="px-3 py-2 bg-blue-500 text-white rounded">Click</button>
+<input type="text" className="border rounded px-3 py-2" />
+<textarea className="w-full border rounded" />
+<select className="border rounded">...</select>
+
+// ✅ CORRECT - shadcn/ui components
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+<Button>Click</Button>
+<Input />
+<Textarea />
+<Select>
+  <SelectTrigger>
+    <SelectValue placeholder="Select..." />
+  </SelectTrigger>
+  <SelectContent>
+    <SelectItem value="option1">Option 1</SelectItem>
+  </SelectContent>
+</Select>
+```
+
+### 2. Use CSS Variables, NOT Hardcoded Colors
+
+**NEVER hardcode Tailwind colors**. Use semantic CSS variables:
+
+```typescript
+// ❌ WRONG - Hardcoded colors
+<div className="bg-blue-500 text-white">
+<div className="bg-gray-100 text-gray-900">
+<div className="border-violet-600">
+<div className="bg-red-500">Error</div>
+
+// ✅ CORRECT - CSS variable tokens
+<div className="bg-primary text-primary-foreground">
+<div className="bg-muted text-muted-foreground">
+<div className="border-primary">
+<div className="bg-destructive text-destructive-foreground">Error</div>
+
+// ✅ Available semantic tokens:
+// background, foreground
+// card, card-foreground
+// primary, primary-foreground
+// secondary, secondary-foreground
+// muted, muted-foreground
+// accent, accent-foreground
+// destructive, destructive-foreground
+// border, input, ring
+```
+
+### 3. DON'T Override shadcn Component Classes
+
+**NEVER add styling classes that conflict with shadcn defaults**:
+
+```typescript
+// ❌ WRONG - Overriding shadcn Button styling
+<Button className="bg-blue-500 hover:bg-blue-600 rounded-lg px-6">
+  Click
+</Button>
+
+// ✅ CORRECT - Use variant prop, only add spacing/layout
+<Button variant="default">Click</Button>
+<Button variant="destructive">Delete</Button>
+<Button variant="outline">Cancel</Button>
+<Button variant="ghost">Menu Item</Button>
+<Button variant="secondary">Secondary</Button>
+
+// ✅ OK to add spacing/layout classes
+<Button className="w-full">Full Width</Button>
+<Button className="mt-4">With Margin</Button>
+```
+
+**Allowed Tailwind on shadcn components:**
+- Spacing: `m-*`, `p-*`, `gap-*`, `space-*`
+- Layout: `flex`, `grid`, `w-*`, `h-*`
+- Display: `hidden`, `block`, `inline-flex`
+
+**NEVER add:**
+- Colors: `bg-*`, `text-*`, `border-*` (use variants instead)
+- Borders: `rounded-*`, `border-*` (use component defaults)
+- Shadows: `shadow-*` (use component defaults)
+
+### 4. Sheet Detail Pattern - Single Toggle Handler
+
+**ALWAYS use a single `onToggleExpand` callback**, never separate open/close:
+
+```typescript
+// ❌ WRONG - Separate handlers
+interface ItemProps {
+  item: Item;
+  isExpanded: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+}
+
+<Sheet
+  open={isExpanded}
+  onOpenChange={(open) => {
+    if (open) onOpen();
+    else onClose();
+  }}
+>
+
+// ✅ CORRECT - Single toggle handler
+interface ItemProps {
+  item: Item;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
+}
+
+export function ItemComponent({ item, isExpanded, onToggleExpand }: ItemProps) {
+  return (
+    <>
+      <div onClick={onToggleExpand}>
+        {/* Row content */}
+      </div>
+
+      <Sheet open={isExpanded} onOpenChange={onToggleExpand}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>{item.name}</SheetTitle>
+          </SheetHeader>
+          {/* Detail content */}
+        </SheetContent>
+      </Sheet>
+    </>
+  );
+}
+
+// Parent component
+export function ItemsList({ items }) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  return (
+    <div>
+      {items.map(item => (
+        <ItemComponent
+          key={item.id}
+          item={item}
+          isExpanded={expandedId === item.id}
+          onToggleExpand={() =>
+            setExpandedId(expandedId === item.id ? null : item.id)
+          }
+        />
+      ))}
+    </div>
+  );
+}
+```
+
+**Why**: Works with URL sync (`useEntityFiltersSync`), browser back/forward, all close methods (Esc, overlay, X button).
+
+### 5. DataGrid with shadcn Theming
+
+**USE the pre-configured shadcn themes** for AG Grid:
+
+```typescript
+import {
+  DataGrid,
+  shadcnGridThemeLight,
+  shadcnGridThemeDark,
+} from "@/components/ui/data-grid";
+
+// ✅ CORRECT - Use DataGrid component with shadcn theming
+<DataGrid
+  data={items}
+  columns={columns}
+  columnConfig={columnConfig}
+  enableRowSelection
+  selectionMode="singleRow"
+  onRowSelected={(event) => {
+    if (event.node.isSelected()) {
+      setExpandedId(event.data.id);
+    }
+  }}
+/>
+
+// ❌ WRONG - Raw AG Grid without shadcn theming
+import { AgGridReact } from "ag-grid-react";
+<AgGridReact rowData={data} columnDefs={columns} />
+```
+
+**DataGrid themes use CSS variables:**
+```typescript
+// Already configured in data-grid.tsx:
+backgroundColor: "hsl(var(--card))",
+foregroundColor: "hsl(var(--card-foreground))",
+borderColor: "hsl(var(--border))",
+headerBackgroundColor: "hsl(var(--muted))",
+accentColor: "hsl(var(--primary))",
+```
+
+### 6. Component File Location
+
+**Colocate components with routes**, share only when used by 3+ routes:
+
+```
+// ✅ Route-specific component
+app/(protected)/calls/
+├── components/
+│   ├── CallItem.tsx
+│   ├── CallDetails.tsx
+│   └── CallForm.tsx
+└── page.tsx
+
+// ✅ Shared component (used by 3+ routes)
+app/_shared/components/
+└── DateBadge.tsx
+
+// ✅ shadcn base components
+components/ui/
+├── button.tsx
+├── sheet.tsx
+└── data-grid.tsx
+```
+
+### 7. Use "use client" Only When Needed
+
+**Server Components are default**. Add `"use client"` only for:
+- useState, useEffect, useRef hooks
+- Event handlers (onClick, onChange)
+- Browser APIs
+
+```typescript
+// ❌ WRONG - Unnecessary "use client"
+"use client";
+export function StaticCard({ title }: { title: string }) {
+  return <Card><CardTitle>{title}</CardTitle></Card>;
+}
+
+// ✅ CORRECT - Server Component (no directive needed)
+export function StaticCard({ title }: { title: string }) {
+  return <Card><CardTitle>{title}</CardTitle></Card>;
+}
+
+// ✅ CORRECT - Client Component (needs interactivity)
+"use client";
+export function InteractiveCard({ title }: { title: string }) {
+  const [isOpen, setIsOpen] = useState(false);
+  return (
+    <Card onClick={() => setIsOpen(!isOpen)}>
+      {/* ... */}
+    </Card>
+  );
+}
+```
+
+## Templates
+
+- Full component template: `references/component-template.tsx`
+- DataGrid + Sheet example: `references/datagrid-example.tsx`
+
+## Reference Implementations
+
+See canonical examples at:
+- `app/(protected)/calls/components/CallItem.tsx` - Sheet detail pattern
+- `app/(protected)/leads/components/LeadItem.tsx` - Similar pattern
+- `components/ui/data-grid.tsx` - DataGrid with shadcn theming
+- `components/ui/button.tsx` - shadcn Button variants
+
+## Common Mistakes to Avoid
+
+1. **Raw HTML elements** - Always use shadcn components
+2. **Hardcoded colors** - Use CSS variables (`bg-primary`, not `bg-blue-500`)
+3. **Overriding shadcn styling** - Use variants, only add spacing/layout
+4. **Separate open/close handlers** - Use single toggle for Sheets
+5. **Raw AG Grid** - Use DataGrid component with shadcn themes
+6. **Everything "use client"** - Server Components by default
+
+## Quick Reference
+
+| Element | Use This | Not This |
+|---------|----------|----------|
+| Button | `<Button variant="...">` | `<button className="...">` |
+| Input | `<Input />` | `<input className="..." />` |
+| Colors | `bg-primary`, `text-muted` | `bg-blue-500`, `text-gray-600` |
+| Sheet | `onOpenChange={toggle}` | `onOpenChange={(open) => open ? onOpen() : onClose()}` |
+| DataGrid | `<DataGrid ... />` | `<AgGridReact ... />` |
+| Client | Only when needed | On every component |
