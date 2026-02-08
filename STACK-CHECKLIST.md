@@ -255,7 +255,7 @@ Use this when starting ANY new project:
 - [ ] PostHog analytics
 - [ ] Playwright E2E tests for critical paths
 - [ ] Linear integration for issue tracking
-- [ ] Full `.claude/` skill suite (copy from ai-operations-boost)
+- [ ] Full `.claude/` skill suite (copy from ai-software-os)
 - [ ] CI build verification step
 - [ ] Rate limiting (Redis/Upstash)
 - [ ] Circuit breaker for external APIs

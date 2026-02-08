@@ -16,7 +16,7 @@ set -euo pipefail
 #   5. Reports what changed
 #
 # Run this whenever you've updated docs/patterns in your source project
-# and want to bring those improvements back to AI Operations Boost.
+# and want to bring those improvements back to AI Software OS.
 # ============================================================================
 
 # --- Configuration -----------------------------------------------------------

@@ -1,6 +1,6 @@
 # Setup Guide
 
-> How to drop AI Operations Boost into any project and customize it for your stack.
+> How to drop AI Software OS into any project and customize it for your stack.
 
 ---
 
@@ -8,7 +8,7 @@
 
 ```bash
 # From your project root
-cp -r path/to/ai-operations-boost/.claude/ ./.claude/
+cp -r path/to/ai-software-os/.claude/ ./.claude/
 ```
 
 This gives you:
@@ -93,7 +93,7 @@ Edit `.claude/settings.json` to match your project:
 If you want the engineering documentation for your team:
 
 ```bash
-cp -r path/to/ai-operations-boost/guides/ ./docs/
+cp -r path/to/ai-software-os/guides/ ./docs/
 ```
 
 ## Step 6: Set Up CLAUDE.md

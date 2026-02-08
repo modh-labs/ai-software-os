@@ -1,4 +1,4 @@
-# AI Operations Boost
+# AI Software OS
 
 > A production-tested AI engineering operations system — skills, agents, commands, hooks, and 45+ engineering guides — ready to drop into any project.
 
@@ -76,13 +76,13 @@ A complete AI-native development system that:
 
 ```bash
 # 1. Clone into your project's parent directory
-git clone https://github.com/modhlabs/ai-operations-boost.git
+git clone https://github.com/modhlabs/ai-software-os.git
 
 # 2. Copy the .claude/ directory into your project
-cp -r ai-operations-boost/.claude/ your-project/.claude/
+cp -r ai-software-os/.claude/ your-project/.claude/
 
 # 3. Copy the engineering guides (optional, for team reference)
-cp -r ai-operations-boost/guides/ your-project/docs/
+cp -r ai-software-os/guides/ your-project/docs/
 
 # 4. Customize placeholders (see SETUP.md)
 # Replace [YOUR_APP], @your-org/*, [YOUR_SENTRY_PROJECT], etc.
