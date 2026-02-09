@@ -1,0 +1,31 @@
+{
+  "title": "Patterns",
+  "pages": [
+    "agents-md-convention",
+    "ai-database-workflow",
+    "badge-design-system",
+    "ci-optimization",
+    "ci-pipeline",
+    "data-fetching",
+    "database-workflow",
+    "embed-redirects",
+    "graphql-api-design",
+    "incident-runbook",
+    "master-detail-realtime",
+    "per-user-onboarding",
+    "performance-patterns",
+    "quick-reference",
+    "repository-pattern",
+    "repository-testing",
+    "route-audit",
+    "sentry-alerting",
+    "sentry-debugging",
+    "server-actions",
+    "testing",
+    "tracing-and-instrumentation",
+    "ui-components",
+    "upstash-redis",
+    "webhook-emission",
+    "webhook-patterns"
+  ]
+}

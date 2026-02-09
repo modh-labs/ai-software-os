@@ -1,0 +1,270 @@
+---
+title: "Core Tech Stack Checklist — Non-Negotiables"
+description: "Every tool and library included with every project, what it does, why it's there, and how they connect. This is the Modh Labs standard stack."
+---
+
+# Core Tech Stack Checklist — Non-Negotiables
+
+> Every tool and library included with every project, what it does, why it's there, and how they connect. This is the Modh Labs standard stack.
+
+---
+
+## How It All Fits Together
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          CLIENT (Browser)                               │
+│                                                                         │
+│  React 19 + TypeScript ──► shadcn/ui + Tailwind CSS                    │
+│       │                         │                                       │
+│       │ Server Components       │ PostHog (analytics)                   │
+│       │ + Suspense streaming    │ Sentry (session replay)              │
+│       ▼                         ▼                                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│                        NEXT.JS APP ROUTER                               │
+│                                                                         │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌──────────────┐ │
+│  │ Server      │  │ Server      │  │ API Routes  │  │ Middleware    │ │
+│  │ Components  │  │ Actions     │  │ (Hono)      │  │ (Clerk JWT)  │ │
+│  │ (read data) │  │ (mutations) │  │ (webhooks)  │  │              │ │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────────────┘ │
+│         │                │                │                            │
+│         └────────┬───────┴───────┬────────┘                            │
+│                  │               │                                      │
+│                  ▼               ▼                                      │
+│         ┌────────────────────────────────┐                              │
+│         │       REPOSITORY LAYER         │                              │
+│         │  (type-safe DB access)         │                              │
+│         │  select(*) + SupabaseClient    │                              │
+│         └────────────┬───────────────────┘                              │
+│                      │                                                  │
+├──────────────────────┼──────────────────────────────────────────────────┤
+│                      ▼                                                  │
+│  ┌───────────────────────────────────────────────────────────────────┐ │
+│  │                      SUPABASE (PostgreSQL)                        │ │
+│  │                                                                   │ │
+│  │  ┌──────────┐  ┌──────────────┐  ┌──────────────────────────┐   │ │
+│  │  │ Tables   │  │ RLS Policies │  │ Clerk JWT → org_id       │   │ │
+│  │  │ + Schema │  │ (org iso-    │  │ (multi-tenant isolation) │   │ │
+│  │  │ + Types  │  │  lation)     │  │                          │   │ │
+│  │  └──────────┘  └──────────────┘  └──────────────────────────┘   │ │
+│  └───────────────────────────────────────────────────────────────────┘ │
+│                                                                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│                    EXTERNAL SERVICES                                    │
+│                                                                         │
+│  Clerk (auth) ◄──► Stripe (billing) ◄──► Nylas (calendar)             │
+│       │                   │                    │                        │
+│       │    Webhooks ──────┼────────────────────┘                        │
+│       │                   │                                             │
+│       ▼                   ▼                                             │
+│  Sentry (errors) ◄── OpenTelemetry (traces) ──► Axiom (logs)          │
+│                                                                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│                    DEVELOPMENT TOOLING                                  │
+│                                                                         │
+│  Claude Code (AI) ◄──► GitHub (code) ◄──► Linear (issues)             │
+│       │                    │                                            │
+│  Biome (lint)         GitHub Actions (CI)                               │
+│  Vitest (test)        Vercel (deploy)                                   │
+│  Playwright (E2E)     Turborepo (monorepo)                              │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Layer 1: Framework & Runtime
+
+| Tool | Type | Purpose | Non-Negotiable? | Why |
+|------|------|---------|-----------------|-----|
+| **Next.js 16** (App Router) | Framework | Full-stack React framework — SSR, API routes, middleware, streaming | Yes | Server Components eliminate client-server waterfalls. App Router is the future of React. |
+| **React 19** | Framework | UI rendering, Server Components, Suspense | Yes | Paired with Next.js. Server Components = zero-JS data fetching. |
+| **TypeScript** (strict mode) | Language | Type safety across entire stack | Yes | Catches bugs at compile time. `strict: true` is non-negotiable — no `any` types. |
+| **bun** | Runtime/Package Manager | Fast installs, fast scripts, monorepo workspace | Yes | 10x faster than npm. Native workspace support. |
+| **Turborepo** | Build tool | Monorepo task orchestration, caching | Yes (monorepo) | Parallel builds, incremental caching. Skip if single app. |
+
+### How they connect:
+Next.js runs on bun. TypeScript compiles everything. Turborepo orchestrates builds across apps/packages. Server Components fetch data directly — no API layer needed for reads.
+
+---
+
+## Layer 2: UI & Design System
+
+| Tool | Type | Purpose | Non-Negotiable? | Why |
+|------|------|---------|-----------------|-----|
+| **Tailwind CSS** | Library | Utility-first CSS, theming via CSS variables | Yes | Consistent styling, dark mode, no CSS files to manage. |
+| **shadcn/ui** | Component Library | Pre-built accessible components (Button, Sheet, Dialog, etc.) | Yes | Not a dependency — you OWN the code. Copy, customize, extend. |
+| **CSS Variables** | Convention | `bg-primary`, `text-muted-foreground` — never hardcoded colors | Yes | Theme-able, dark mode for free, consistent across apps. |
+
+### How they connect:
+shadcn/ui components use Tailwind + CSS variables. Every component references semantic tokens (`--primary`, `--muted`) not raw colors. The pattern-enforcer hook BLOCKS hardcoded colors.
+
+---
+
+## Layer 3: Database & Data Access
+
+| Tool | Type | Purpose | Non-Negotiable? | Why |
+|------|------|---------|-----------------|-----|
+| **Supabase** | External Service | PostgreSQL database + auth policies + real-time | Yes | Hosted Postgres with RLS. No ORM needed. Generated types. |
+| **Row Level Security (RLS)** | Database Feature | Multi-tenant data isolation at DB level | Yes | Every table gets `organization_id` + RLS policy. Can't accidentally leak data. |
+| **Repository Pattern** | Internal Convention | Type-safe database access layer | Yes | All queries go through repositories. Never `supabase.from()` in actions. |
+| **Generated Types** | Internal Package | `@your-org/database-types` — auto-generated from schema | Yes | `select(*)` + generated types = full type safety with zero manual interfaces. |
+| **Schema-First Migrations** | Convention | Edit `domain.sql` → `db diff` → auto-generate migration | Yes | Never write migrations by hand. Schema is source of truth. |
+
+### How they connect:
+You edit `supabase/schemas/*.sql` → run `supabase db diff` → it generates a migration → `db push` applies it → `db:types` regenerates TypeScript types → repositories use those types. RLS reads `org_id` from Clerk's JWT automatically.
+
+---
+
+## Layer 4: Authentication & Authorization
+
+| Tool | Type | Purpose | Non-Negotiable? | Why |
+|------|------|---------|-----------------|-----|
+| **Clerk** | External Service | Auth, organizations, webhooks, JWT, user management | Yes | Multi-tenant orgs built-in. JWT contains `org_id` that Supabase RLS reads. |
+| **Clerk Webhooks** | Integration | User/org lifecycle events → sync to Supabase | Yes | `user.created`, `organization.membership.created` → DB sync. |
+| **JWT Claims** | Convention | `org_id`, `org_role` in every request | Yes | RLS policies read JWT claims — no manual filtering needed. |
+
+### How they connect:
+User signs in via Clerk → JWT issued with `org_id` → every Supabase query automatically filtered by RLS reading that JWT → repositories never need to pass `organization_id`. Clerk webhooks keep Supabase user/org tables in sync.
+
+---
+
+## Layer 5: Payments & Billing
+
+| Tool | Type | Purpose | Non-Negotiable? | Why |
+|------|------|---------|-----------------|-----|
+| **Stripe** | External Service | Subscriptions, checkout, seat-based billing, webhooks | Yes (if SaaS) | Industry standard. Flexible billing mode for mixed intervals. |
+| **Stripe Webhooks** | Integration | Payment lifecycle events → DB sync | Yes | `checkout.session.completed`, `subscription.updated`, etc. |
+| **Webhook Handler Registry** | Internal Convention | SOLID pattern — one handler per event type | Yes | Single responsibility. Easy to add new event handlers. |
+
+### How they connect:
+Checkout creates subscription → Stripe fires webhooks → webhook route dispatches to handler → handler updates `stripe_billing` table → Clerk org membership changes trigger seat sync → Stripe subscription quantity updated.
+
+---
+
+## Layer 6: Calendar & Scheduling
+
+| Tool | Type | Purpose | Non-Negotiable? | Why |
+|------|------|---------|-----------------|-----|
+| **Nylas** | External Service | Calendar sync, OAuth, booking flows, availability | Project-specific | Unified calendar API (Google, Outlook, etc.). Per-user connections. |
+
+### How they connect:
+Each user connects their calendar via OAuth (Nylas) → grant stored in DB → booking links query availability via Nylas API → bookings create calendar events. Invalid grants are kept in DB but filtered from UI.
+
+---
+
+## Layer 7: Testing
+
+| Tool | Type | Purpose | Non-Negotiable? | Why |
+|------|------|---------|-----------------|-----|
+| **Vitest** | Library | Unit + integration tests, fast, native TypeScript | Yes | Same config as Vite. 10x faster than Jest. Native ESM. |
+| **Playwright** | Library | End-to-end browser tests | Yes (critical paths) | Real browser testing. Cross-browser. Visual regression. |
+| **@testing-library/react** | Library | Component testing with user-centric queries | Yes | Test what users see, not implementation details. |
+| **faker** | Library | Realistic test data generation | Yes | Factory functions with `faker` → consistent, readable test data. |
+
+### How they connect:
+Unit tests mock Supabase client → test repository functions and server actions in isolation. Integration tests use real(ish) data flows. E2E tests use Playwright against staging. CI runs `vitest` on every PR.
+
+---
+
+## Layer 8: Observability
+
+| Tool | Type | Purpose | Non-Negotiable? | Why |
+|------|------|---------|-----------------|-----|
+| **Sentry** | External Service | Error tracking, performance monitoring, session replay | Yes | Domain-specific capture functions. Web Vitals. Source maps. |
+| **OpenTelemetry** | Library | Distributed tracing standard | Yes | Trace requests across services. AI agent telemetry. |
+| **Pino** | Library | Structured JSON logging | Yes | `createModuleLogger('module')` — never `console.log`. |
+| **Axiom** | External Service | Log aggregation and search | Recommended | Structured logs with trace correlation. |
+| **PostHog** | External Service | Product analytics, feature flags, session recordings | Recommended | User behavior tracking. Funnel analysis. |
+
+### How they connect:
+Every request gets a trace ID (OpenTelemetry) → Sentry captures errors with that trace ID → Pino logs include trace ID → Axiom stores logs → you can trace a single request from browser → API → DB. Sentry alerts on error spikes.
+
+---
+
+## Layer 9: CI/CD & Deployment
+
+| Tool | Type | Purpose | Non-Negotiable? | Why |
+|------|------|---------|-----------------|-----|
+| **GitHub** | External Service | Code hosting, PRs, code review | Yes | Industry standard. `gh` CLI for automation. |
+| **GitHub Actions** | External Service | CI quality gates (lint, typecheck, test) | Yes | Runs on every PR. Fail-fast pipeline (~5 seconds). |
+| **Vercel** | External Service | Hosting, preview deployments, edge functions | Yes (or similar) | Auto-deploy on push. Preview URLs on every PR. Zero config. |
+| **Biome** | Library | Linting + formatting in one tool | Yes | Replaces ESLint + Prettier. 100x faster. Single config. |
+| **Husky** | Library | Git hooks (pre-commit) | Yes | Runs lint before commit. Catches issues locally before CI. |
+
+### How they connect:
+Developer pushes → Husky runs pre-commit lint → GitHub Actions runs CI (`scripts/ci.sh`: lint → typecheck → test) → PR gets check status → merge triggers Vercel auto-deploy → preview on PRs, production on main.
+
+---
+
+## Layer 10: AI-Assisted Development
+
+| Tool | Type | Purpose | Non-Negotiable? | Why |
+|------|------|---------|-----------------|-----|
+| **Claude Code** | External Tool | AI coding assistant with skills, agents, commands, hooks | Yes | This entire system runs on Claude Code. 21 skills enforce patterns. |
+| **Cursor** | External Tool | AI-aware code editor | Recommended | Cross-editor compatibility via AGENTS.md convention. |
+| **Linear** | External Service | Issue tracking, backlog management | Yes | Structured tickets. `/triage` command enriches tickets automatically. |
+| **Slack** | External Service | Team communication, alerts | Recommended | Sentry alerts, deployment notifications. |
+
+### How they connect:
+Linear ticket created → Claude Code reads it via MCP → `/triage` enriches with Sentry errors + DB context → developer works on feature → skills auto-enforce patterns → hooks block anti-patterns → `/pr` creates PR with full context → CI validates → merge → deploy.
+
+---
+
+## Layer 11: Internal Packages (Monorepo)
+
+| Package | Type | Purpose | Non-Negotiable? | Why |
+|---------|------|---------|-----------------|-----|
+| **@your-org/database-types** | Internal | Auto-generated Supabase types | Yes | Single source of truth for all DB types. |
+| **@your-org/repositories** | Internal | Shared DB access (web + API) | Yes | Repository functions shared across apps. |
+| **@your-org/ui** | Internal | shadcn/ui components | Yes | Shared design system across apps. |
+| **@your-org/components** | Internal | Shared React components | Yes | Business components used by 3+ apps. |
+
+### How they connect:
+`database-types` is generated from schema → `repositories` imports those types → `web` and `api` apps import from `repositories` → UI components come from `@your-org/ui` → shared business components from `@your-org/components`.
+
+---
+
+## The Non-Negotiable Checklist
+
+Use this when starting ANY new project:
+
+### Must Have (Day 1)
+
+- [ ] Next.js App Router + React + TypeScript strict
+- [ ] Tailwind CSS + shadcn/ui
+- [ ] Supabase with RLS enabled on every table
+- [ ] Clerk for auth (or equivalent with JWT + org support)
+- [ ] Repository pattern for all DB access
+- [ ] Vitest for testing
+- [ ] Biome for linting
+- [ ] GitHub Actions CI pipeline
+- [ ] Sentry for error tracking
+- [ ] Pino for structured logging
+- [ ] Claude Code with `.claude/` skills directory
+
+### Must Have (Week 1)
+
+- [ ] Stripe integration (if SaaS billing)
+- [ ] Webhook handler registry (SOLID pattern)
+- [ ] Schema-first migration workflow
+- [ ] Generated TypeScript types from schema
+- [ ] Pre-commit hooks (Husky + Biome)
+- [ ] `error.tsx` for every route
+- [ ] Zod validation on all server actions
+
+### Should Have (Month 1)
+
+- [ ] OpenTelemetry tracing
+- [ ] PostHog analytics
+- [ ] Playwright E2E tests for critical paths
+- [ ] Linear integration for issue tracking
+- [ ] Full `.claude/` skill suite (copy from ai-software-os)
+- [ ] CI build verification step
+- [ ] Rate limiting (Redis/Upstash)
+- [ ] Circuit breaker for external APIs
+
+---
+
+*This is the Modh Labs standard. Every tool earns its place by solving a real problem encountered in production. No tool is included "just in case."*

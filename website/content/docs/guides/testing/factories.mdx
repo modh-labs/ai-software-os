@@ -1,0 +1,315 @@
+---
+title: "Test Factories and Data Generation"
+description: "Test factories provide type-safe, realistic test data generation"
+---
+# Test Factories
+
+Test factories provide type-safe, realistic test data generation.
+
+## Location
+
+```
+apps/web/test/factories/
+├── index.ts                # Central exports
+├── calls.factory.ts        # Call-related factories
+├── leads.factory.ts        # Lead-related factories
+├── audit-logs.factory.ts   # Audit log factories
+├── webhooks.factory.ts     # Webhook payload factories
+├── users.factory.ts        # User/org factories
+└── common.ts               # Shared utilities
+```
+
+## Usage
+
+```typescript
+import { createTestCall, createTestLead, createTestUser } from "@/test/factories";
+
+describe("my feature", () => {
+  it("uses test factories", () => {
+    const lead = createTestLead({
+      email: "custom@example.com", // Override specific fields
+    });
+
+    const call = createTestCall({
+      lead_id: lead.id,
+      scheduled_at: new Date().toISOString(),
+    });
+
+    expect(call.lead_id).toBe(lead.id);
+  });
+});
+```
+
+## Factory Patterns
+
+### Basic Factory
+
+```typescript
+// factories/leads.factory.ts
+import { faker } from "@faker-js/faker";
+import type { Database } from "@your-org/database-types";
+
+type LeadRow = Database["public"]["Tables"]["leads"]["Row"];
+type LeadInsert = Database["public"]["Tables"]["leads"]["Insert"];
+
+const TEST_ORG_ID = "org_test_123";
+
+export function createTestLead(overrides: Partial<LeadInsert> = {}): LeadRow {
+  return {
+    id: faker.string.uuid(),
+    organization_id: TEST_ORG_ID,
+    email: faker.internet.email(),
+    full_name: faker.person.fullName(),
+    phone: faker.phone.number(),
+    status: "new",
+    source: "website",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    ...overrides,
+  };
+}
+```
+
+### Builder Pattern (Advanced)
+
+For complex test data with relationships:
+
+```typescript
+// factories/calls.factory.ts
+import { faker } from "@faker-js/faker";
+import type { Database } from "@your-org/database-types";
+import { createTestLead } from "./leads.factory";
+
+type CallRow = Database["public"]["Tables"]["calls"]["Row"];
+
+export class CallFactory {
+  private data: Partial<CallRow> = {};
+  private lead?: ReturnType<typeof createTestLead>;
+
+  withScheduledAt(date: string | Date) {
+    this.data.scheduled_at = typeof date === "string" ? date : date.toISOString();
+    return this;
+  }
+
+  withLead(lead?: ReturnType<typeof createTestLead>) {
+    this.lead = lead ?? createTestLead();
+    this.data.lead_id = this.lead.id;
+    return this;
+  }
+
+  withStatus(status: "scheduled" | "completed" | "cancelled") {
+    this.data.status = status;
+    return this;
+  }
+
+  withRecording(hasRecording = true) {
+    if (hasRecording) {
+      this.data.recording_url = `https://storage.example.com/${faker.string.uuid()}.mp3`;
+    }
+    return this;
+  }
+
+  build(): CallRow {
+    const now = new Date().toISOString();
+
+    return {
+      id: faker.string.uuid(),
+      organization_id: "org_test_123",
+      lead_id: this.lead?.id ?? createTestLead().id,
+      scheduled_at: new Date(Date.now() + 86400000).toISOString(), // Tomorrow
+      status: "scheduled",
+      created_at: now,
+      updated_at: now,
+      ...this.data,
+    } as CallRow;
+  }
+
+  // Build with associated lead
+  buildWithLead(): { call: CallRow; lead: ReturnType<typeof createTestLead> } {
+    const lead = this.lead ?? createTestLead();
+    this.data.lead_id = lead.id;
+
+    return {
+      call: this.build(),
+      lead,
+    };
+  }
+}
+
+// Usage
+const { call, lead } = new CallFactory()
+  .withScheduledAt("2026-01-20T14:00:00Z")
+  .withStatus("scheduled")
+  .withRecording()
+  .buildWithLead();
+```
+
+## Common Factories
+
+### Leads
+
+```typescript
+import { createTestLead } from "@/test/factories";
+
+// Basic lead
+const lead = createTestLead();
+
+// Qualified lead
+const qualifiedLead = createTestLead({
+  status: "qualified",
+  qualified_at: new Date().toISOString(),
+});
+
+// Lead with custom email
+const customLead = createTestLead({
+  email: "specific@test.com",
+});
+```
+
+### Calls
+
+```typescript
+import { createTestCall, CallFactory } from "@/test/factories";
+
+// Basic call
+const call = createTestCall();
+
+// Call with specific status
+const completedCall = createTestCall({
+  status: "completed",
+  completed_at: new Date().toISOString(),
+});
+
+// Using builder
+const callWithLead = new CallFactory()
+  .withLead()
+  .withScheduledAt(new Date())
+  .build();
+```
+
+### Webhook Payloads
+
+```typescript
+import { createLeadCreatedPayload, createCallCompletedPayload } from "@/test/factories";
+
+// Lead webhook payload
+const leadPayload = createLeadCreatedPayload({
+  email: "test@example.com",
+});
+
+// Call webhook payload
+const callPayload = createCallCompletedPayload({
+  duration_seconds: 1800,
+  outcome: "qualified",
+});
+```
+
+### Audit Logs
+
+```typescript
+import { createTestAuditLog } from "@/test/factories";
+
+const auditLog = createTestAuditLog({
+  action: "lead.created",
+  entity_type: "lead",
+  metadata: { email: "test@example.com" },
+});
+```
+
+## Type Safety
+
+All factories use generated database types:
+
+```typescript
+import type { Database } from "@your-org/database-types";
+
+// These types are auto-generated from your Supabase schema
+type LeadRow = Database["public"]["Tables"]["leads"]["Row"];
+type LeadInsert = Database["public"]["Tables"]["leads"]["Insert"];
+
+// Factories return the Row type (includes all columns)
+export function createTestLead(overrides: Partial<LeadInsert> = {}): LeadRow {
+  // ...
+}
+```
+
+## Best Practices
+
+### 1. Use Factories Over Inline Objects
+
+```typescript
+// ❌ Avoid
+const lead = {
+  id: "123",
+  email: "test@example.com",
+  // Missing required fields!
+};
+
+// ✅ Prefer
+const lead = createTestLead({
+  email: "test@example.com",
+});
+```
+
+### 2. Override Only What's Relevant
+
+```typescript
+// ❌ Avoid - too many overrides
+const lead = createTestLead({
+  id: "custom_id",
+  email: "test@example.com",
+  full_name: "Test User",
+  phone: "+1234567890",
+  status: "new",
+  source: "website",
+  // ...
+});
+
+// ✅ Prefer - only override what the test cares about
+const lead = createTestLead({
+  email: "test@example.com",
+});
+```
+
+### 3. Use Builders for Complex Scenarios
+
+```typescript
+// ✅ Builder pattern for complex test data
+const testData = new CallFactory()
+  .withLead(createTestLead({ status: "qualified" }))
+  .withScheduledAt("2026-01-20T14:00:00Z")
+  .withRecording()
+  .buildWithLead();
+
+// Access both call and lead
+expect(testData.call.lead_id).toBe(testData.lead.id);
+```
+
+### 4. Centralize Common Test Values
+
+```typescript
+// factories/common.ts
+export const TEST_ORG_ID = "org_test_123";
+export const TEST_USER_ID = "user_test_123";
+export const TEST_ADMIN_EMAIL = "admin@test.example.com";
+
+// Use in factories
+import { TEST_ORG_ID } from "./common";
+
+export function createTestLead() {
+  return {
+    organization_id: TEST_ORG_ID,
+    // ...
+  };
+}
+```
+
+## Regenerating Types
+
+When the database schema changes, regenerate types:
+
+```bash
+bun db:types
+```
+
+This updates `@your-org/database-types` which factories depend on.

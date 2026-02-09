@@ -1,0 +1,13 @@
+{
+  "title": "Standards",
+  "pages": [
+    "database",
+    "environment-variables",
+    "observability",
+    "security",
+    "testing",
+    "typescript",
+    "ui-architecture",
+    "ui-components"
+  ]
+}

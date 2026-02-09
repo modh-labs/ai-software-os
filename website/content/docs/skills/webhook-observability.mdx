@@ -1,0 +1,243 @@
+---
+title: "Webhook Observability"
+description: "Ensure all webhook handlers follow your project's observability patterns. Use when writing webhook handlers, adding logging, Sentry tags, duration tracing, or handling duplicate events. Enforces webhook logger lifecycle, Sentry integration, duration tracking, and idempotency checks."
+---
+
+# Webhook Observability Skill
+
+## When This Skill Activates
+
+This skill automatically activates when you:
+- Create or modify webhook handlers (`app/api/webhooks/**/*.ts`)
+- Add logging to webhook processing code
+- Work with Sentry tags or error tracking in webhooks
+- Discuss webhook observability, timing, or debugging
+- Need to handle duplicate webhook events (idempotency)
+
+## Core Rules (MUST Follow)
+
+### 1. ALWAYS Use `createWebhookLogger()` - Never Raw Logger
+
+**NEVER use raw `logger.info()`/`logger.error()` in webhook handlers.** Always use the webhook logger factory.
+
+```typescript
+// ❌ WRONG - Raw logger loses context
+import { createModuleLogger } from "@/app/_shared/lib/logger";
+const logger = createModuleLogger("stripe-webhooks");
+logger.info({ eventId }, "Processing event");
+
+// ✅ CORRECT - Webhook logger with full context
+import { createWebhookLogger } from "@/app/_shared/lib/webhooks";
+
+const log = createWebhookLogger({
+  provider: "stripe",
+  handler: "handlePaymentSucceeded",
+  eventType: "payment_intent.succeeded",
+  organizationId,
+});
+log.info({ eventId }, "Processing event");
+```
+
+**Why**: Webhook logger automatically includes timing, Sentry tags, and structured context.
+
+### 2. ALWAYS Call Lifecycle Methods
+
+Every handler MUST follow the `start()` → `success()`/`failure()` lifecycle:
+
+```typescript
+// ✅ CORRECT - Full lifecycle
+const log = createWebhookLogger({ /* ... */ });
+
+log.start();  // Starts timer, applies Sentry tags
+try {
+  // Handler logic...
+  log.success({ entity_id: result.id });  // Logs duration, warns if slow
+} catch (error) {
+  log.failure(error as Error);  // Logs error, captures to Sentry
+  throw error;
+}
+```
+
+```typescript
+// ❌ WRONG - Missing lifecycle methods
+const log = createWebhookLogger({ /* ... */ });
+// No log.start()!
+const result = await processEvent();
+// No log.success()!
+return result;
+```
+
+### 3. ALWAYS Set Sentry Tags Early
+
+Set tags at the start of processing for filtering in Sentry UI:
+
+```typescript
+const log = createWebhookLogger({
+  provider: "nylas",
+  handler: "handleBookingCreated",
+  eventType: "booking.created",
+  organizationId,         // Tag: webhook.organization_id
+  bookingId: payload.id,  // Tag: webhook.booking_id
+});
+
+// Update tags after creating entities
+log.setCallId(createdCall.id);   // Tag: webhook.call_id
+log.setLeadId(createdLead.id);   // Tag: webhook.lead_id
+```
+
+**Why**: Tags enable filtering in Sentry (e.g., `webhook.organization_id:org_123`).
+
+### 4. Log Slow Operations with Duration Tracking
+
+Duration tracking is automatic - just use lifecycle methods:
+
+```typescript
+log.start();
+// ... long operation ...
+log.success({ result });  // Automatically logs: "⏱️ [SLOW] ... completed in 6234ms"
+```
+
+Default threshold: 5000ms. Override per-handler:
+
+```typescript
+const log = createWebhookLogger({
+  // ...
+  durationThresholdMs: 10000,  // Warn only if >10s
+});
+```
+
+### 5. ALWAYS Include Idempotency Checks
+
+Webhooks can be delivered multiple times. Always check for existing records:
+
+```typescript
+log.start();
+
+// Idempotency check FIRST
+const existing = await findExistingRecord(payload.id);
+if (existing) {
+  log.info({}, "Already processed (idempotent skip)");
+  log.success({ reason: "already_processed" });
+  return { success: true, reason: "already_processed" };
+}
+
+// Continue with processing...
+```
+
+### 6. Use Structured Emoji Prefixes
+
+Follow the standard emoji convention for visual log scanning:
+
+| Prefix | Meaning | Method |
+|--------|---------|--------|
+| `🪝` | Handler start | `log.start()` |
+| `🔍` | Debug/trace info | `log.debug()` |
+| `✅` | Success | `log.success()` or `log.info()` |
+| `⚠️` | Warning (non-fatal) | `log.warn()` |
+| `❌` | Error/failure | `log.failure()` or `log.error()` |
+| `⏱️` | Slow operation | Automatic in `log.success()` |
+
+## Handler Template
+
+```typescript
+import { createWebhookLogger } from "@/app/_shared/lib/webhooks";
+
+export async function handleEventName(
+  payload: EventPayload,
+  organizationId?: string
+) {
+  const log = createWebhookLogger({
+    provider: "stripe",  // or "nylas", "clerk"
+    handler: "handleEventName",
+    eventType: "event.type",
+    organizationId,
+  });
+
+  log.start();
+
+  try {
+    // 1. Idempotency check
+    const existing = await findExisting(payload.id);
+    if (existing) {
+      log.info({}, "Already processed (idempotent skip)");
+      log.success({ reason: "already_processed" });
+      return { success: true, reason: "already_processed" };
+    }
+
+    // 2. Validate payload
+    log.debug({ payload_keys: Object.keys(payload) }, "🔍 Processing payload");
+
+    // 3. Business logic
+    const result = await processEvent(payload);
+
+    // 4. Update Sentry tags with created entity IDs
+    if (result.callId) log.setCallId(result.callId);
+    if (result.leadId) log.setLeadId(result.leadId);
+
+    // 5. Handle side effects (non-blocking)
+    try {
+      await triggerSideEffects(result);
+    } catch (sideEffectError) {
+      log.warn({ err: sideEffectError }, "⚠️ Side effects failed (non-critical)");
+    }
+
+    // 6. Success
+    log.success({ entity_id: result.id });
+    return { success: true, ...result };
+
+  } catch (error) {
+    log.failure(error as Error);
+    throw error;
+  }
+}
+```
+
+## Using `withWebhookTracing` Wrapper
+
+For simpler handlers, use the wrapper to guarantee lifecycle calls:
+
+```typescript
+import { createWebhookLogger, withWebhookTracing } from "@/app/_shared/lib/webhooks";
+
+export async function handleSimpleEvent(payload: EventPayload) {
+  const log = createWebhookLogger({
+    provider: "clerk",
+    handler: "handleSimpleEvent",
+    eventType: "user.created",
+  });
+
+  return await withWebhookTracing(log, async () => {
+    // Your handler logic - start/success/failure are automatic
+    const result = await processUser(payload);
+    return { user_id: result.id };
+  });
+}
+```
+
+## Reference Implementation
+
+See the canonical examples at:
+- `app/_shared/lib/webhooks/webhook-logger.ts` - Logger implementation
+- `app/api/webhooks/nylas/handlers/booking-created.ts` - Full handler example
+- `app/api/webhooks/nylas/handlers/notetaker-media.ts` - Idempotency example
+
+## Common Mistakes to Avoid
+
+1. **Using raw logger** - Always use `createWebhookLogger()`
+2. **Forgetting `log.start()`** - Timer won't work, Sentry tags won't apply
+3. **Forgetting `log.success()`** - Duration won't be logged
+4. **Not calling `log.failure()` on errors** - Sentry won't capture
+5. **Processing duplicates** - Always check for existing records
+6. **Not setting entity IDs** - Can't filter by call/lead in Sentry
+7. **Side effects blocking main flow** - Use try-catch for non-critical operations
+
+## Quick Reference
+
+| Pattern | Correct | Wrong |
+|---------|---------|-------|
+| Logger | `createWebhookLogger()` | `createModuleLogger()` |
+| Start | `log.start()` | (nothing) |
+| Success | `log.success({ data })` | `return result` |
+| Failure | `log.failure(error)` | `throw error` |
+| Entity IDs | `log.setCallId(id)` | (not setting) |
+| Idempotency | Check existing first | Process blindly |

@@ -1,0 +1,100 @@
+---
+title: "Supported Tech Stack"
+description: "This system was built for a specific stack but most patterns are adaptable. Here's what's assumed and how to swap alternatives."
+---
+
+# Supported Tech Stack
+
+> This system was built for a specific stack but most patterns are adaptable. Here's what's assumed and how to swap alternatives.
+
+---
+
+## Core Stack (Tested With)
+
+| Category | Tool | Role | Alternatives |
+|----------|------|------|-------------|
+| **Framework** | Next.js (App Router) | Full-stack web, SSR, API routes | Remix, SvelteKit, Nuxt |
+| **Language** | TypeScript (strict) | Type safety everywhere | — |
+| **UI Library** | React 19 | Components, hooks, Server Components | — (tied to Next.js) |
+| **UI Components** | shadcn/ui + Tailwind CSS | Design system, accessible primitives | Radix UI, Headless UI |
+| **Database** | Supabase (PostgreSQL) | Data, auth policies (RLS), real-time | Prisma + Postgres, Drizzle, PlanetScale |
+| **Auth** | Clerk | Multi-tenant orgs, JWT, webhooks | Auth.js, Supabase Auth, Lucia |
+| **Payments** | Stripe | Subscriptions, webhooks, seat billing | Paddle, Lemon Squeezy |
+| **Testing** | Vitest + Playwright | Unit/integration + E2E | Jest, Cypress |
+| **Observability** | Sentry + OpenTelemetry | Error tracking, tracing, performance | Datadog, New Relic, Axiom |
+| **CI/CD** | GitHub Actions | Quality gates, automated checks | GitLab CI, CircleCI |
+| **AI Dev** | Claude Code + Cursor | Skills, agents, commands, hooks | — (this IS the system) |
+| **Package Manager** | bun + Turborepo | Fast installs, monorepo orchestration | pnpm + Nx, npm workspaces |
+| **Linting** | Biome | Lint + format in one tool | ESLint + Prettier |
+| **Project Mgmt** | Linear | Issue tracking, backlog management | Jira, GitHub Issues |
+
+---
+
+## What's Portable vs Stack-Specific
+
+### Fully Portable (works with any stack)
+- All slash commands (`/audit`, `/review`, `/pr`, `/test`, `/new-feature`, `/create-migration`)
+- Subagents (code-reviewer, test-runner, pr-creator, database-expert)
+- Hook architecture (pattern-enforcer concept)
+- All guides in `guides/security/`
+- CI pipeline patterns
+- Documentation conventions
+
+### Needs Light Adaptation
+- Repository pattern (swap Supabase client for Prisma/Drizzle)
+- Server action patterns (swap for tRPC procedures or API routes)
+- Component creation (swap shadcn for your component library)
+- Testing patterns (swap Vitest API for Jest if needed)
+
+### Supabase-Specific
+- RLS policy patterns
+- Schema-first migration workflow
+- `select(*)` convention
+- Organization isolation via JWT claims
+
+### Next.js-Specific
+- App Router file conventions
+- Server Components / Client Components split
+- `revalidatePath()` cache invalidation
+- Route colocation patterns
+
+---
+
+## Adapting for Alternative Stacks
+
+### If you use Prisma instead of Supabase
+1. In `repository-pattern` skill: replace `SupabaseClient` with `PrismaClient`
+2. Remove `select(*)` rule (Prisma uses type-safe select)
+3. Replace RLS patterns with Prisma middleware for org isolation
+4. In `database-migration` skill: replace `supabase db diff` with `prisma migrate dev`
+
+### If you use tRPC instead of Server Actions
+1. In `server-action` skill: replace with tRPC procedure patterns
+2. Replace `revalidatePath()` with React Query invalidation
+3. Keep the return type pattern (`{ success, data, error }`)
+
+### If you use Jest instead of Vitest
+1. Replace `vi.mock()` with `jest.mock()` in testing skill
+2. Replace `vi.fn()` with `jest.fn()`
+3. Keep all testing patterns — they're framework-agnostic
+
+### If you don't use a monorepo
+1. Replace `@your-org/*` imports with relative paths (`@/lib/*`)
+2. Remove Turborepo references from CI patterns
+3. Keep all other patterns as-is
+
+---
+
+## External Tools Integration
+
+| Tool | How It's Used | Required? |
+|------|--------------|-----------|
+| **GitHub** | PRs, CI, code review | Yes (for PR/CI commands) |
+| **Linear** | Issue tracking, triage | No (remove triage + linear-ticket skills) |
+| **Sentry** | Error tracking, tracing | No (remove observability skills) |
+| **Slack** | Notifications | No |
+| **Vercel** | Deployment | No (any hosting works) |
+
+---
+
+*Every tool is swappable except Claude Code itself — that's what runs the system.*

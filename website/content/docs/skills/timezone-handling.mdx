@@ -1,0 +1,199 @@
+---
+title: "Timezone Handling"
+description: "Ensure correct timezone handling for all date/time displays, emails, and notifications in your application. Use when formatting dates, sending scheduled emails, displaying events, or working with Intl.DateTimeFormat. Prevents date boundary bugs and timezone confusion."
+---
+
+# Timezone Handling Skill
+
+## When This Skill Activates
+
+This skill automatically activates when you:
+- Format dates for display
+- Send emails with date/time information
+- Display scheduled events (calls, meetings)
+- Work with booking data or calendar events
+
+## Critical Rule
+
+**EVERY date/time display MUST be formatted in the relevant user's timezone.**
+
+This is non-negotiable. Violations cause date boundary bugs.
+
+## The Problem
+
+```typescript
+// ❌ WRONG - Date boundary bug
+const meetingDate = "2025-11-17"; // Monday
+const formattedDate = new Date(meetingDate).toLocaleDateString();
+// In PST: "Sunday, November 16, 2025" ← WRONG DAY!
+
+// ✅ CORRECT - Explicit timezone
+const meetingDate = "2025-11-17";
+const guestTimezone = "America/Vancouver";
+const formattedDate = formatDateForEmail(meetingDate, guestTimezone);
+// Result: "Monday, November 17, 2025" ← CORRECT!
+```
+
+## Timezone Selection Matrix
+
+| Context | Use This Timezone | Source |
+|---------|------------------|--------|
+| **Guest/Lead Email** | Guest's timezone | `booking.timezone` or `lead.timezone` |
+| **Team Member Email** | Team member's timezone | `users.timezone` |
+| **Dashboard/UI** | Current user's timezone | `users.timezone` (logged-in user) |
+| **Lead Details** | Lead's timezone | `lead.timezone` |
+| **Calendar Exports** | Participant's timezone | Depends on recipient |
+| **Webhooks (Logging)** | UTC | Always UTC for debugging |
+
+## Standard Formatters
+
+### formatDateForEmail - ALWAYS Pass Timezone
+
+```typescript
+import { formatDateForEmail } from "@/app/_shared/lib/email/resend";
+
+// ❌ WRONG - Missing timezone
+const date = formatDateForEmail(call.scheduled_at);
+
+// ✅ CORRECT - Explicit timezone
+const guestTimezone = booking.timezone || "America/New_York";
+const date = formatDateForEmail(call.scheduled_at, guestTimezone);
+```
+
+### Intl.DateTimeFormat - ALWAYS Use timeZone Option
+
+```typescript
+// ❌ WRONG - No timezone
+const formatted = new Intl.DateTimeFormat("en-US", {
+  weekday: "long",
+  month: "long",
+  day: "numeric",
+}).format(date);
+
+// ✅ CORRECT - Explicit timezone
+const formatted = new Intl.DateTimeFormat("en-US", {
+  weekday: "long",
+  month: "long",
+  day: "numeric",
+  timeZone: guestTimezone, // ← REQUIRED
+}).format(date);
+```
+
+### NEVER Use Without Timezone
+
+```typescript
+// ❌ WRONG - All of these cause date boundary bugs
+new Date(dateString).toLocaleDateString();
+new Date(dateString).toLocaleTimeString();
+date.toDateString();
+date.toString();
+
+// ✅ CORRECT - Always use Intl with timeZone
+new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(date);
+```
+
+## Multi-Recipient Email Pattern
+
+**CRITICAL**: When sending emails to multiple recipients (guest AND team member), create separate formatted data for each:
+
+```typescript
+// ✅ CORRECT - Discriminated timezone formatting
+async function sendBookingNotifications(booking: Booking, teamMember: User) {
+  // Guest's perspective (their timezone)
+  const guestBookingData = {
+    date: formatDateForEmail(booking.scheduled_at, booking.timezone),
+    time: formatTimeForTimezone(booking.start_time, booking.timezone),
+    timezone: booking.timezone,
+  };
+
+  // Team member's perspective (their timezone)
+  const teamBookingData = {
+    date: formatDateForEmail(booking.scheduled_at, teamMember.timezone),
+    time: formatTimeForTimezone(booking.start_time, teamMember.timezone),
+    timezone: teamMember.timezone,
+  };
+
+  // Send to guest
+  await sendEmail({
+    to: booking.guest_email,
+    template: "booking-confirmation",
+    data: guestBookingData, // ← Guest sees their timezone
+  });
+
+  // Send to team member
+  await sendEmail({
+    to: teamMember.email,
+    template: "booking-notification",
+    data: teamBookingData, // ← Team member sees their timezone
+  });
+}
+```
+
+## Getting Timezones from Data Sources
+
+### Guest/Lead Timezone
+
+```typescript
+// From booking
+const guestTimezone = booking.timezone || "America/New_York";
+
+// From lead
+const leadTimezone = lead.timezone || "America/New_York";
+```
+
+### Team Member Timezone
+
+```typescript
+// From users table
+const { data: user } = await supabase
+  .from("users")
+  .select("timezone")
+  .eq("id", userId)
+  .single();
+
+const teamTimezone = user?.timezone || "America/New_York";
+```
+
+### Current User Timezone (Dashboard)
+
+```typescript
+// For UI displays
+const { data: currentUser } = await supabase
+  .from("users")
+  .select("timezone")
+  .eq("clerk_id", clerkUserId)
+  .single();
+
+const userTimezone = currentUser?.timezone || "UTC";
+```
+
+## Reference Implementation
+
+See canonical example at:
+- `app/api/webhooks/nylas/handlers/booking-created.ts:307-352` - Multi-recipient email formatting
+- `app/_shared/lib/email/resend.ts` - formatDateForEmail, formatTimeForEmail utilities
+- `docs/internal/guides/TIMEZONE_HANDLING.md` - Complete guide
+
+## Common Mistakes to Avoid
+
+1. **Calling formatters without timezone** - Always pass timezone parameter
+2. **Using toLocaleDateString()** - Use Intl.DateTimeFormat with timeZone
+3. **Same format for all recipients** - Create separate formatted data per timezone
+4. **Assuming server timezone** - Never rely on server's local time
+5. **Hardcoding timezones** - Always get from user/booking data
+
+## Quick Reference
+
+| Bad | Good |
+|-----|------|
+| `formatDateForEmail(date)` | `formatDateForEmail(date, timezone)` |
+| `date.toLocaleDateString()` | `Intl.DateTimeFormat(..., { timeZone })` |
+| Same data for all emails | Separate data per recipient timezone |
+| Hardcoded "America/New_York" | `booking.timezone` or `user.timezone` |
+
+## Checklist Before Any Email/Display
+
+- [ ] Do I know whose timezone to use? (guest, team member, logged-in user)
+- [ ] Am I passing timezone explicitly to formatters?
+- [ ] For multi-recipient emails, am I creating separate formatted data?
+- [ ] Am I sourcing timezone from the correct database field?

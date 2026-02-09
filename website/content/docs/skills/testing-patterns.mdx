@@ -1,0 +1,236 @@
+---
+title: "Testing Patterns"
+description: "Create tests following your project's Vitest and Playwright patterns. Use when writing unit tests, integration tests, mocking Supabase, testing server actions, or running test suites. Enforces __tests__ directories, repository mocking, and test data cleanup."
+---
+
+# Testing Patterns Skill
+
+## When This Skill Activates
+
+This skill automatically activates when you:
+- Write or modify test files (`*.test.ts`, `*.test.tsx`)
+- Create mocks for Supabase, repositories, or services
+- Discuss testing strategy or coverage
+- Run test commands (`bun test`, `bun test:ci`)
+
+## Commands
+
+```bash
+bun test          # Watch mode (re-run on changes)
+bun test:ci       # Single run (CI mode)
+bun test:ui       # Interactive UI
+bun test:e2e      # Playwright headed mode
+bun ci            # Full pipeline (lint + typecheck + tests)
+```
+
+## Test Organization
+
+Tests use `__tests__/` directories next to source code:
+
+```
+app/(protected)/calls/actions/
+├── cancel-reschedule-call.ts
+└── __tests__/
+    ├── cancel-flow.test.ts
+    └── reschedule-flow.test.ts
+```
+
+### Naming Convention
+
+- Unit tests: `*.test.ts`
+- Integration tests: `*-integration.test.ts`
+- E2E tests: `*.e2e.test.ts`
+
+## 4 Testing Patterns
+
+### Pattern 1: Unit Test Repository (Mock Supabase)
+
+Test repository logic in isolation with mocked Supabase client:
+
+```typescript
+import { describe, it, expect, beforeEach } from "vitest";
+import { createMockSupabaseClient } from "@/test/mocks/supabase.mock";
+import { createSale } from "../sales.repository";
+
+describe("sales.repository", () => {
+  let mockSupabase: ReturnType<typeof createMockSupabaseClient>;
+
+  beforeEach(() => {
+    mockSupabase = createMockSupabaseClient();
+  });
+
+  it("should create a sale", async () => {
+    mockSupabase._chain.insert.mockReturnValue(mockSupabase._chain);
+    mockSupabase._chain.select.mockReturnValue(mockSupabase._chain);
+    mockSupabase._chain.single.mockResolvedValue({
+      data: { id: "sale_123", amount: 1000 },
+      error: null,
+    });
+
+    const result = await createSale(mockSupabase as any, {
+      call_id: "call_456",
+      amount: 1000,
+    });
+
+    expect(result.amount).toBe(1000);
+    expect(mockSupabase.from).toHaveBeenCalledWith("sales");
+  });
+});
+```
+
+### Pattern 2: Integration Test Repository (Real Supabase)
+
+Test against real database for RLS, constraints, indexes:
+
+```typescript
+describe("sales.repository (integration)", () => {
+  let supabase: Awaited<ReturnType<typeof createServiceRoleClient>>;
+  let testOrgId: string;
+
+  beforeEach(async () => {
+    supabase = await createServiceRoleClient();
+    testOrgId = `test_org_${Date.now()}`;
+  });
+
+  afterEach(async () => {
+    await supabase.from("sales").delete().eq("organization_id", testOrgId);
+  });
+
+  it("should create and retrieve sales", async () => {
+    const sale = await createSale(supabase, { organization_id: testOrgId, amount: 1000 });
+    expect(sale.id).toBeDefined();
+  });
+});
+```
+
+### Pattern 3: Unit Test Server Action (Mock Repositories)
+
+Mock at the repository boundary — never mock internal functions:
+
+```typescript
+import { vi } from "vitest";
+import * as salesRepository from "@/app/_shared/repositories/sales.repository";
+
+vi.mock("@/app/_shared/repositories/sales.repository", () => ({
+  updateSalesStatusByCallId: vi.fn(),
+}));
+
+describe("updatePaymentStatusAction", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it("should update payment status", async () => {
+    vi.spyOn(salesRepository, "updateSalesStatusByCallId").mockResolvedValue(undefined);
+
+    const result = await updatePaymentStatusAction({ callId: "call_123", status: "paid" });
+    expect(result.success).toBe(true);
+  });
+});
+```
+
+### Pattern 4: Integration Test Server Action (Real Repositories)
+
+Full flow with actual database:
+
+```typescript
+describe("updatePaymentStatusAction (integration)", () => {
+  // Setup real test data in beforeEach
+  // Clean up in afterEach
+  // Test the full action → repository → database flow
+});
+```
+
+## Core Rules
+
+### DO
+
+- ✅ Use `__tests__/` directory next to source code
+- ✅ Mock at repository boundary for action tests
+- ✅ Use `createMockSupabaseClient` from `@/test/mocks/supabase.mock`
+- ✅ Clean up test data in `afterEach`
+- ✅ Use unique test IDs (`test_org_${Date.now()}`)
+- ✅ `beforeEach` cleanup of all mocks (`vi.clearAllMocks()`)
+- ✅ Mock env vars before dynamic imports
+
+### DON'T
+
+- ❌ Use `supabase.from()` directly in tests (use repositories)
+- ❌ Mock internal functions (mock at boundary)
+- ❌ Mix unit and integration tests in same describe block
+- ❌ Skip cleanup (causes flaky tests)
+- ❌ Hardcode test data (use unique IDs or faker)
+
+## Quick Reference
+
+| Pattern | Mock What | Test What |
+|---------|-----------|-----------|
+| Unit repo | Supabase client | Query building, error handling |
+| Integration repo | Nothing (real DB) | RLS, constraints, data flow |
+| Unit action | Repository functions | Business logic, validation |
+| Integration action | Nothing (real DB) | Full flow end-to-end |
+
+## Detailed Documentation
+
+- Mock Supabase client details: `references/mock-supabase-pattern.md`
+- Testing docs: `docs/patterns/testing.md`
+- Repository testing: `docs/patterns/repository-testing.md`
+
+## Reference: mock-supabase-pattern.md
+
+# Mock Supabase Client Pattern
+
+## Usage
+
+```typescript
+import { createMockSupabaseClient } from "@/test/mocks/supabase.mock";
+
+const mockSupabase = createMockSupabaseClient();
+```
+
+## Mocking Query Chains
+
+```typescript
+// Mock insert → select → single chain
+mockSupabase._chain.insert.mockReturnValue(mockSupabase._chain);
+mockSupabase._chain.select.mockReturnValue(mockSupabase._chain);
+mockSupabase._chain.single.mockResolvedValue({
+  data: mockData,
+  error: null,
+});
+
+// Mock select → eq → order chain
+mockSupabase._chain.select.mockReturnValue(mockSupabase._chain);
+mockSupabase._chain.eq.mockReturnValue(mockSupabase._chain);
+mockSupabase._chain.order.mockResolvedValue({
+  data: [mockItem1, mockItem2],
+  error: null,
+});
+```
+
+## Verifying Calls
+
+```typescript
+expect(mockSupabase.from).toHaveBeenCalledWith("table_name");
+expect(mockSupabase._chain.insert).toHaveBeenCalledWith(expectedData);
+expect(mockSupabase._chain.eq).toHaveBeenCalledWith("id", expectedId);
+```
+
+## Mocking Errors
+
+```typescript
+mockSupabase._chain.single.mockResolvedValue({
+  data: null,
+  error: { message: "Not found", code: "PGRST116" },
+});
+```
+
+## Type Casting
+
+```typescript
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/app/_shared/lib/supabase/database.types";
+
+const result = await myRepoFunction(
+  mockSupabase as unknown as SupabaseClient<Database>,
+  input
+);
+```

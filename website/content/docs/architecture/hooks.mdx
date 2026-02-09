@@ -1,0 +1,25 @@
+---
+title: "Hooks Overview"
+description: "Deterministic pattern enforcement hooks that run automatically to catch violations before they are committed."
+---
+
+# Hooks Overview
+
+The AI Software OS includes **1 hook** for deterministic pattern enforcement.
+
+## Pattern Enforcer
+
+The `pattern-enforcer.py` hook runs automatically and catches common pattern violations before they make it into the codebase.
+
+Location: `.claude/hooks/pattern-enforcer.py`
+
+### What It Enforces
+
+- Repository pattern usage (no direct `supabase.from()` calls)
+- Server action conventions
+- Import restrictions (no cross-route imports)
+- Type safety (no `any` types)
+
+### How It Works
+
+The hook is a Python script that scans changed files and reports violations. It runs as a pre-commit check and integrates with Claude Code's hook system.

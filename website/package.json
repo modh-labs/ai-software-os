@@ -1,0 +1,28 @@
+{
+  "name": "ai-software-os-docs",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "fumadocs-core": "^15.8.5",
+    "fumadocs-mdx": "^13.0.8",
+    "fumadocs-ui": "^15.8.5",
+    "next": "^15.3.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.8",
+    "@types/mdx": "^2.0.13",
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.8",
+    "typescript": "^5.8.3"
+  }
+}

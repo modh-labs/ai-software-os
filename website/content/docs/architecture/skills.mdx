@@ -1,0 +1,40 @@
+---
+title: "Skills Overview"
+description: "All 21 skills that Claude Code uses to automatically enforce coding patterns and standards."
+---
+
+# Skills Overview
+
+The AI Software OS includes **21 skills** that automatically activate based on context. Each skill enforces specific patterns and conventions.
+
+| Skill | Description |
+|-------|-------------|
+| [CI Pipeline](/docs/skills/ci-pipeline) | Enforce CI pipeline conventions for your application. Use when adding CI checks, modifying GitHub Actions workflows, dis... |
+| [Component Creation](/docs/skills/component-creation) | Create UI components following your project's shadcn/ui patterns. Use when building components, styling, theming, tables... |
+| [Cross Editor Compatibility](/docs/skills/cross-editor-compatibility) | Ensure AI configuration works across Claude Code and Cursor. Use when creating AGENTS.md files, adding skills, setting u... |
+| [Data Fetching](/docs/skills/data-fetching) | Implement data fetching following your project's Server Component and Suspense streaming patterns. Use when fetching dat... |
+| [Database Migration](/docs/skills/database-migration) | Guide schema-first database workflow for your application. Use when discussing schema changes, creating tables, modifyin... |
+| [Detail View Pattern](/docs/skills/detail-view-pattern) | Create entity detail views following your project's three-layer architecture. Use when building expandable detail sheets... |
+| [Documentation](/docs/skills/documentation) | Guide documentation creation and placement across your codebase. Use when adding new features, patterns, runbooks, integ... |
+| [GraphQL API Design](/docs/skills/graphql-api-design) | Enforce Shopify graph-first design for your project's Partner API. Use when adding GraphQL types, mutations, REST endpoi... |
+| [Linear Ticket](/docs/skills/linear-ticket) | Create rich, well-documented Linear tickets with user stories, journey diagrams, architecture context, edge cases, and a... |
+| [Observability Logging](/docs/skills/observability-logging) | Enforce structured logging, Sentry integration, and distributed tracing patterns. Use when adding logging, error trackin... |
+| [Performance Patterns](/docs/skills/performance-patterns) | Implement performance optimizations following your project's patterns. Use when pages are slow, adding loading states, s... |
+| [Pull Request](/docs/skills/pull-request) | Create pull requests with mandatory CI validation, unit tests, and rich descriptions. Use when creating PRs, submitting ... |
+| [Repository Pattern](/docs/skills/repository-pattern) | Ensure all database access follows the your repository pattern. Use when writing database queries, creating repositories... |
+| [Route Architecture](/docs/skills/route-architecture) | Guide code organization, folder structure, and route architecture following your project's colocation patterns. Use when... |
+| [Security Patterns](/docs/skills/security-patterns) | Enforce security standards for your application including RLS policies, webhook signature verification, Zod validation, ... |
+| [Server Action](/docs/skills/server-action) | Create server actions following your project's established patterns. Use when writing mutations, form submissions, data ... |
+| [SOLID Webhook Patterns](/docs/skills/solid-webhook-patterns) | Enforce SOLID principles in webhook architecture for maintainability and extensibility. Use when creating webhook routes... |
+| [Testing Patterns](/docs/skills/testing-patterns) | Create tests following your project's Vitest and Playwright patterns. Use when writing unit tests, integration tests, mo... |
+| [Timezone Handling](/docs/skills/timezone-handling) | Ensure correct timezone handling for all date/time displays, emails, and notifications in your application. Use when for... |
+| [Triage](/docs/skills/triage) | Automated backlog triage — finds recent Linear tickets with thin documentation, enriches them with Sentry errors, Supaba... |
+| [Webhook Observability](/docs/skills/webhook-observability) | Ensure all webhook handlers follow your project's observability patterns. Use when writing webhook handlers, adding logg... |
+
+## How Skills Work
+
+Skills are stored in `.claude/skills/` and each contains a `SKILL.md` file with:
+- **Frontmatter**: name, description, allowed tools
+- **Activation rules**: When the skill automatically engages
+- **Patterns**: The conventions and rules it enforces
+- **References**: Example code and templates

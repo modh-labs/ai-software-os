@@ -1,0 +1,10 @@
+{
+  "title": "Security",
+  "pages": [
+    "access-control",
+    "data-retention",
+    "incident-response",
+    "key-rotation",
+    "overview"
+  ]
+}

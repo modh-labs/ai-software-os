@@ -1,0 +1,496 @@
+---
+title: "GraphQL API Design: Graph-First Approach"
+description: "your project's GraphQL API follows Shopify's Graph-First Design principles to create an intuitive, business-focused API that partners love to use."
+---
+# GraphQL API Design
+
+## Philosophy: Build a Graph, Not a Database API
+
+your project's GraphQL API follows **Shopify's Graph-First Design principles** to create an intuitive, business-focused API that partners love to use.
+
+### Core Principles
+
+| Principle | What It Means |
+|-----------|---------------|
+| **Graph-First** | Navigable relationships (`Lead.calls`, `Call.lead`) — NOT just IDs |
+| **Business Domain** | Semantic types (`Money`, `Email`, `DateTime`) — NOT primitives |
+| **Hidden Internals** | No `organization_id`, `visitor_id`, or join tables exposed |
+| **Business Logic** | Computed fields (`totalRevenue`, `hasScheduledCall`) — NOT just CRUD |
+| **Relay Pagination** | `Connection/Edge` pattern for efficient large datasets |
+| **Type Safety** | TypeScript types become GraphQL schema automatically |
+
+**Reference**: [Shopify's GraphQL Design Tutorial](https://github.com/Shopify/graphql-design-tutorial)
+
+---
+
+## Quick Start
+
+### Authentication
+
+All GraphQL queries require an API key in the Authorization header:
+
+```bash
+curl -X POST https://api.[YOUR_DOMAIN]/graphql \
+  -H "Authorization: Bearer [app]_pk_live_xxxxxxxx" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "{ leads(first: 10) { edges { node { name email } } } }"}'
+```
+
+### GraphQL Playground
+
+Visit `https://api.[YOUR_DOMAIN]/graphql` (dev: `http://localhost:3001/graphql`) for interactive playground with:
+- Auto-complete
+- Schema documentation
+- Query history
+- Example queries
+
+---
+
+## Graph-First vs Database-First
+
+### Database-First (Bad)
+
+```graphql
+# Multiple queries required:
+query {
+  lead(id: "123") {
+    id
+    call_ids  # Just IDs, not navigable
+  }
+}
+
+# Then fetch calls separately:
+query {
+  calls(ids: ["call1", "call2"]) {
+    id
+    closer_id  # Another ID to fetch separately
+  }
+}
+```
+
+### Graph-First (Good)
+
+```graphql
+# Everything in ONE query:
+query {
+  lead(id: "123") {
+    name
+    email
+    totalRevenue { formatted }  # Business logic, not CRUD
+
+    calls(first: 10, outcome: CLOSED) {
+      edges {
+        node {
+          scheduledAt
+          closer {
+            name
+            email
+            closeRate  # Business metric
+          }
+          product {
+            name
+          }
+          payment {
+            amount { formatted }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
+## Business Logic Fields
+
+Provide computed fields that answer business questions:
+
+```graphql
+query {
+  lead(id: "123") {
+    # Contact info
+    name
+    email
+    status
+
+    # BUSINESS LOGIC (computed by server)
+    totalRevenue {
+      amount
+      currency
+      formatted  # "$1,234.56"
+    }
+    hasScheduledCall  # Boolean, not a raw count
+    daysSinceCreated  # Computed from createdAt
+    completedCallCount
+
+    # ATTRIBUTION
+    source {
+      utm {
+        source
+        medium
+        campaign
+      }
+      referrer
+      landingPage
+    }
+  }
+}
+```
+
+---
+
+## Relay-Style Pagination
+
+All list fields use the Relay Connection pattern:
+
+```graphql
+query {
+  leads(first: 50, after: "cursor_from_previous_page") {
+    edges {
+      node {
+        id
+        name
+      }
+      cursor  # Use for next page
+    }
+    pageInfo {
+      hasNextPage  # true if more results
+      hasPreviousPage
+      startCursor
+      endCursor  # Use as 'after' for next page
+    }
+    totalCount  # Optional: Total number of leads
+  }
+}
+```
+
+**Pagination Example**:
+```javascript
+// Fetch first page
+const page1 = await client.query.leads({ first: 50 });
+
+// Fetch next page
+const page2 = await client.query.leads({
+  first: 50,
+  after: page1.pageInfo.endCursor,
+});
+```
+
+---
+
+## Mutation Pattern (Shopify Style)
+
+### Generic Pattern (Bad)
+
+```graphql
+mutation {
+  updateLead(id: "123", data: { email: "invalid" })  # Throws error
+}
+```
+
+### Shopify Pattern (Good)
+
+```graphql
+mutation {
+  leadUpdate(id: "123", input: { email: "invalid" }) {
+    lead {
+      id
+      email
+    }
+    userErrors {
+      message    # "Invalid email format"
+      field      # ["email"]
+      code       # "INVALID_EMAIL"
+    }
+  }
+}
+```
+
+**Why UserErrors?**
+- No exceptions thrown (safer for clients)
+- Multiple errors returned at once
+- Field-level error mapping
+- Programmatic error codes
+
+### Business-Meaningful Mutations
+
+```graphql
+# Generic update (bad):
+mutation {
+  updateLead(id: "123", data: { status: "qualified" })
+}
+
+# Business action (good):
+mutation {
+  leadChangeStatus(id: "123", status: QUALIFIED) {
+    lead {
+      status
+      updatedAt
+    }
+    userErrors {
+      message
+    }
+  }
+}
+```
+
+---
+
+## Architecture
+
+### Tech Stack
+
+| Component | Purpose |
+|-----------|---------|
+| **Pylon** | TypeScript → GraphQL schema generator |
+| **Hono** | Fast HTTP server (runs on Bun) |
+| **DataLoader** | N+1 query prevention (batching + caching) |
+| **Supabase** | PostgreSQL with RLS (auto org-scoping) |
+
+### Request Flow
+
+```
+Client Request
+     │
+     ▼
+┌─────────────────────────────┐
+│  Pylon GraphQL Endpoint     │
+│  (/graphql)                 │
+└─────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────┐
+│  Middleware Layer           │
+│  - API Key Auth             │
+│  - Rate Limiting            │
+│  - DataLoader Injection     │
+└─────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────┐
+│  GraphQL Resolvers          │
+│  - Query.lead()             │
+│  - Lead.calls()             │
+│  - Lead.totalRevenue()      │
+└─────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────┐
+│  DataLoaders (N+1 Prevention)│
+│  - leadLoader.load(id)      │
+│  - callsByLeadLoader.load() │
+└─────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────┐
+│  Supabase (PostgreSQL + RLS)│
+│  - Organization auto-scoped │
+└─────────────────────────────┘
+```
+
+---
+
+## N+1 Query Prevention
+
+### Without DataLoader (Bad)
+
+```javascript
+// Fetch 10 leads
+const leads = await getLeads(10);  // 1 query
+
+// For each lead, fetch calls
+for (const lead of leads) {
+  const calls = await getCalls(lead.id);  // 10 separate queries!
+}
+// Total: 11 queries
+```
+
+### With DataLoader (Good)
+
+```javascript
+// Fetch 10 leads
+const leads = await getLeads(10);  // 1 query
+
+// DataLoader batches all call requests into ONE query
+for (const lead of leads) {
+  const calls = await callsByLeadLoader.load(lead.id);  // Batched!
+}
+// Total: 2 queries (leads + calls in bulk)
+```
+
+**How DataLoader Works**:
+1. Client requests `leads { calls { ... } }`
+2. GraphQL resolver calls `callsByLeadLoader.load(leadId)` for each lead
+3. DataLoader batches all `load()` calls in same tick
+4. Executes ONE query: `SELECT * FROM calls WHERE lead_id IN (...)`
+5. Returns results mapped back to original requests
+
+---
+
+## Adding New Types
+
+### 1. Define TypeScript Class
+
+```typescript
+// graphql/types.ts
+export class BookingLink {
+  id!: string;
+  title!: string;
+
+  // Navigable relationship
+  bookedCalls!: (args: { first?: number }) => Promise<CallConnection>;
+
+  // Business logic
+  conversionRate!: () => Promise<number>;
+}
+```
+
+### 2. Create DataLoader
+
+```typescript
+// graphql/dataloaders.ts
+const bookingLinkLoader = new DataLoader(async (ids) => {
+  const { data } = await supabase
+    .from('booking_links')
+    .select('*')
+    .in('id', ids);
+  return ids.map(id => data?.find(link => link.id === id) || null);
+});
+```
+
+### 3. Implement Resolver
+
+```typescript
+// graphql/resolvers.ts
+export function transformBookingLink(dbLink: DBBookingLink): BookingLink {
+  return {
+    id: dbLink.id,
+    title: dbLink.title,
+
+    bookedCalls: async (args) => {
+      // Fetch calls, apply pagination
+    },
+
+    conversionRate: async () => {
+      // Calculate: closed / total
+    },
+  };
+}
+```
+
+### 4. Add Query
+
+```typescript
+// graphql/index.ts
+export const graphql = {
+  Query: {
+    bookingLink: async (id: string) => {
+      const dbLink = await BookingLinksResolver.getLink(organizationId, id);
+      return transformBookingLink(dbLink);
+    },
+  },
+};
+```
+
+### 5. Build & Test
+
+```bash
+bun run build  # Generates updated schema
+```
+
+---
+
+## Best Practices
+
+### 1. Always Use Navigable Relationships
+
+```graphql
+# Bad
+type Lead {
+  call_ids: [String!]!  # Client must fetch separately
+}
+
+# Good
+type Lead {
+  calls(first: Int): CallConnection!  # Navigable
+}
+```
+
+### 2. Provide Business Logic, Not Just CRUD
+
+```graphql
+# Bad
+type Lead {
+  payment_count: Int
+  total_paid_cents: Int
+}
+
+# Good
+type Lead {
+  totalRevenue: Money!  # Computed, semantic type
+  hasScheduledCall: Boolean!  # Business question
+}
+```
+
+### 3. Use Semantic Types
+
+```graphql
+# Bad
+type Lead {
+  created_at: String  # Generic
+  total_paid: Number  # No currency
+}
+
+# Good
+type Lead {
+  createdAt: DateTime!  # Semantic scalar
+  totalRevenue: Money!  # With currency + formatting
+}
+```
+
+### 4. Hide Implementation Details
+
+```graphql
+# Bad
+type Lead {
+  organization_id: String!  # Internal
+  visitor_id: String!  # Tracking ID
+}
+
+# Good
+type Lead {
+  # organization_id hidden (auth auto-scopes)
+  # visitor_id hidden (internal tracking)
+}
+```
+
+---
+
+## File Structure
+
+```
+apps/api/src/
+├── graphql/
+│   ├── index.ts           # Main GraphQL export (Query, Mutation)
+│   ├── types.ts           # TypeScript types → GraphQL schema
+│   ├── resolvers.ts       # Field resolvers (transformLead, transformCall)
+│   └── dataloaders.ts     # N+1 prevention (leadLoader, callLoader)
+├── resolvers/
+│   └── leads.resolver.ts  # Shared business logic (REST + GraphQL)
+├── routes/
+│   └── leads.ts           # REST API routes (still available)
+├── middleware/
+│   ├── api-key-auth.ts    # API key authentication
+│   └── rate-limit.ts      # Rate limiting
+└── app.ts                 # Hono app + middleware
+```
+
+---
+
+## References
+
+- **Shopify GraphQL Design**: https://github.com/Shopify/graphql-design-tutorial
+- **Relay Pagination Spec**: https://relay.dev/graphql/connections.htm
+- **DataLoader**: https://github.com/graphql/dataloader
+- **Pylon Docs**: https://pylon.cronit.io/docs

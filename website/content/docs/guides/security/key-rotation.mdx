@@ -1,0 +1,58 @@
+---
+title: "API Key Rotation Procedures"
+description: "| Credential | Rotation Frequency | Owner | Procedure |"
+---
+# Key & Credential Rotation Policy
+
+## Rotation Schedule
+
+| Credential | Rotation Frequency | Owner | Procedure |
+|------------|-------------------|-------|-----------|
+| **API Keys (Partner)** | Yearly or on compromise | Org Admin | Revoke old key, create new key in Settings > API Keys |
+| **INTEGRATION_ENCRYPTION_KEY** | Yearly or on compromise | Platform Admin | See "Encryption Key Rotation" below |
+| **Clerk Signing Keys** | Managed by Clerk | Clerk | Automatic rotation via Clerk dashboard |
+| **Supabase Service Role Key** | On compromise only | Platform Admin | Rotate via Supabase dashboard, update env vars |
+| **Stripe API Keys** | Yearly or on compromise | Platform Admin | Rotate via Stripe dashboard, update env vars |
+| **Nylas Client Secrets** | On compromise only | Platform Admin | Rotate via Nylas dashboard, update env vars |
+| **Sentry DSN** | On compromise only | Platform Admin | Regenerate in Sentry settings |
+
+## API Key Lifecycle
+
+### Creation
+1. Admin creates key in Settings > API Keys
+2. Key is displayed once (never stored in plaintext)
+3. SHA-256 hash stored in `api_keys.key_hash`
+4. Audit log entry created (entity_type: `api_key`, action: `created`)
+
+### Revocation
+1. Admin revokes key in Settings > API Keys
+2. `revoked_at` timestamp set (soft delete)
+3. Key immediately rejected by auth middleware
+4. Audit log entry created (action: `revoked`)
+
+### Expiry
+- Optional expiry date set at creation
+- Auth middleware checks `expires_at` on every request
+- Expired keys return 401 Unauthorized
+
+## Encryption Key Rotation
+
+The `INTEGRATION_ENCRYPTION_KEY` encrypts integration credentials (e.g., Stripe API keys stored in `stripe_api_keys` table) using AES-256-GCM.
+
+### Rotation Procedure
+
+1. **Generate new key:** Create a new 32+ character random string
+2. **Decrypt existing data:** Using the old key, decrypt all encrypted credentials
+3. **Re-encrypt with new key:** Using the new key, re-encrypt all credentials
+4. **Update environment variable:** Set `INTEGRATION_ENCRYPTION_KEY` to new value
+5. **Deploy:** Roll out the new key to all environments
+6. **Verify:** Test that integrations still work with re-encrypted credentials
+
+**Important:** This is a breaking change — all encrypted data must be re-encrypted. Schedule during maintenance window.
+
+## Environment Variable Security
+
+- All secrets stored in Vercel environment variables (encrypted at rest)
+- Preview/staging environments use separate credentials from production
+- `.env` files blocked from git commits via pre-commit hook
+- No secrets in client-side code (`NEXT_PUBLIC_` prefix only for non-sensitive values)

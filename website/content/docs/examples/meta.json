@@ -1,0 +1,8 @@
+{
+  "title": "Examples",
+  "pages": [
+    "sentry-observability",
+    "stripe-billing",
+    "supabase-nextjs"
+  ]
+}

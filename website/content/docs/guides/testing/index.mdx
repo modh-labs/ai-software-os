@@ -1,0 +1,204 @@
+---
+title: "Testing Guide Overview"
+description: "This document outlines the enterprise-grade testing infrastructure for your application"
+---
+# Testing Strategy
+
+This document outlines the enterprise-grade testing infrastructure for your application.
+
+## Quick Links
+
+- [Getting Started](./getting-started.md)
+- [Test Factories](./factories.md)
+- [Mocking Guide](./mocking.md)
+- [Integration Tests](./integration-tests.md)
+
+## Test Stack
+
+| Tool | Purpose |
+|------|---------|
+| **Vitest** | Unit and integration tests |
+| **Playwright** | E2E browser tests |
+| **MSW** | Network-level HTTP mocking |
+| **Testing Library** | React component testing |
+| **Faker.js** | Realistic test data generation |
+
+## Coverage Targets
+
+| Risk Level | Target | Examples |
+|------------|--------|----------|
+| **P0 (Critical)** | 100% | GDPR, billing, security, partner API |
+| **P1 (High)** | 80%+ | Core business logic, repositories, server actions |
+| **P2 (Medium)** | 60%+ | UI components, utilities, helpers |
+
+## Test Pyramid
+
+```
+        ┌─────────────┐
+        │    E2E     │ 10% - Critical user flows
+        ├─────────────┤
+        │ Integration │ 20% - Real dependencies
+        ├─────────────┤
+        │    Unit     │ 70% - Fast, isolated
+        └─────────────┘
+```
+
+## Running Tests
+
+```bash
+# Unit/Integration tests
+bun test              # Watch mode
+bun test:ci           # CI mode (run once)
+
+# Specific test file
+bun test path/to/file.test.ts
+
+# Pattern matching
+bun test stripe       # All tests with "stripe" in path
+bun test --coverage   # With coverage report
+
+# E2E tests
+cd apps/web
+bunx playwright test                    # All E2E tests
+bunx playwright test --ui               # Interactive UI mode
+bunx playwright test --grep "billing"   # Pattern matching
+```
+
+## Directory Structure
+
+```
+apps/web/
+├── test/
+│   ├── factories/              # Type-safe test factories
+│   │   ├── calls.factory.ts
+│   │   ├── leads.factory.ts
+│   │   └── common.ts
+│   ├── mocks/                  # Shared mock utilities
+│   │   ├── repository-mock.ts
+│   │   └── service-mock.ts
+│   ├── templates/              # Test file templates
+│   │   ├── server-action.test.ts
+│   │   └── repository.test.ts
+│   └── e2e/                    # Playwright E2E tests
+│       ├── fixtures/
+│       ├── utils/
+│       ├── billing/
+│       ├── gdpr/
+│       └── partner-api/
+├── app/
+│   └── (protected)/
+│       └── feature/
+│           └── _actions/__tests__/   # Colocated unit tests
+└── vitest.config.ts
+```
+
+## Key Patterns
+
+### 1. Server Action Tests
+
+```typescript
+// Colocated with actions: app/(protected)/calls/_actions/__tests__/
+describe("updateCallOutcome", () => {
+  beforeEach(() => {
+    mockAuthFn = vi.fn(() => Promise.resolve({ userId, orgId }));
+    mockRepositoryFn = vi.fn();
+  });
+
+  it("validates input with Zod schema", async () => {
+    const result = await updateCallOutcome({ callId: "invalid" });
+    expect(result.success).toBe(false);
+  });
+
+  it("returns success for valid input", async () => {
+    mockRepositoryFn.mockResolvedValue({ id: "call_123" });
+    const result = await updateCallOutcome({ callId: "call_123", outcome: "qualified" });
+    expect(result.success).toBe(true);
+  });
+});
+```
+
+### 2. Repository Tests
+
+```typescript
+// Integration tests with real Supabase
+describe("calls.repository - Integration", () => {
+  let supabase: SupabaseClient;
+
+  beforeEach(async () => {
+    supabase = await createServiceRoleClient();
+  });
+
+  it("enforces RLS - cross-org queries return empty", async () => {
+    const callOrgA = await createCall(supabase, { organization_id: "org_A" });
+    const result = await getCallsByOrganization(userSupabase, "org_B");
+    expect(result).toHaveLength(0);
+  });
+});
+```
+
+### 3. E2E Tests
+
+```typescript
+// Playwright with authenticated fixtures
+test("user can complete checkout", async ({ authenticatedPage }) => {
+  await authenticatedPage.goto("/billing/subscribe");
+  await authenticatedPage.getByRole("button", { name: /subscribe/i }).click();
+  await expect(authenticatedPage).toHaveURL(/checkout\.stripe\.com/);
+});
+```
+
+## Mocking Strategy
+
+### DO: Mock at module boundaries
+
+```typescript
+// Good: Mock the entire repository module
+vi.mock("@your-org/repositories/calls", () => ({
+  getCallById: vi.fn().mockResolvedValue(testCall),
+}));
+```
+
+### DON'T: Mock internal implementation
+
+```typescript
+// Bad: Mocking Supabase internals
+vi.mock("@/app/_shared/lib/supabase/server", () => ({
+  createClient: vi.fn().mockResolvedValue({
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({...})
+      })
+    })
+  })
+}));
+```
+
+## Environment Variables for Tests
+
+```bash
+# Required for integration tests
+STRIPE_TEST_SECRET_KEY=sk_test_...    # Stripe test mode
+NYLAS_TEST_API_KEY=nyk_test_...       # Nylas sandbox
+SUPABASE_SERVICE_ROLE_KEY=...         # Supabase access
+
+# Set in CI via GitHub secrets
+```
+
+## CI/CD Integration
+
+Tests run automatically on:
+- Every PR to `main`
+- Every push to `main`
+
+CI workflow:
+1. Unit tests (`bun test:ci`)
+2. Type checking (`bun typecheck`)
+3. Lint (`bun lint`)
+4. E2E tests (`playwright test`)
+
+## Related Documentation
+
+- [Patterns: Server Actions](./patterns/server-actions.md)
+- [Patterns: Repositories](./patterns/repositories.md)
+- [Patterns: Webhooks](./patterns/webhooks.md)
+- [Patterns: Components](./patterns/components.md)

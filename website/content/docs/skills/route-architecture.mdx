@@ -1,0 +1,272 @@
+---
+title: "Route Architecture"
+description: "Guide code organization, folder structure, and route architecture following your project's colocation patterns. Use when creating routes, deciding file placement, organizing imports, or discussing services vs repositories. Enforces 3+ routes threshold, actions folder pattern, and shared infrastructure conventions."
+---
+
+# Route Architecture Skill
+
+## When This Skill Activates
+
+This skill automatically activates when you:
+- Create new routes or features
+- Decide where to place new code
+- Organize components, actions, or types
+- Discuss services vs repositories
+- Work with `_shared/` directory
+
+## Core Philosophy
+
+**Colocation first, share when necessary.**
+
+Code lives with the route that uses it until it needs to be shared. The threshold for sharing is **3+ routes** or **2 routes with clear expansion potential**.
+
+## Directory Structure
+
+```
+app/
+├── (protected)/           # Authenticated routes
+│   └── [route]/           # Example: calls, leads, dashboard
+│       ├── page.tsx       # Server Component (data fetching)
+│       ├── actions.ts     # Server actions (1-2 actions)
+│       ├── actions/       # Server actions folder (3+ actions)
+│       │   ├── create-item.ts
+│       │   └── delete-item.ts
+│       ├── components/    # Route-specific components
+│       ├── loading.tsx    # Skeleton (matches UI layout)
+│       ├── error.tsx      # Error boundary with retry
+│       └── CLAUDE.md      # Route documentation
+│
+├── (public)/              # Public routes
+│
+├── api/webhooks/          # ONLY for external webhooks
+│
+└── _shared/               # Shared code (3+ routes)
+    ├── components/        # Shared UI components
+    ├── lib/               # Utilities, clients
+    ├── repositories/      # Data access layer
+    ├── services/          # Business logic
+    ├── types/             # TypeScript types
+    └── validation/        # Zod schemas
+```
+
+## When to Use What
+
+### Repository vs Service vs Action
+
+| Layer | Purpose | Location | When to Use |
+|-------|---------|----------|-------------|
+| **Repository** | Database CRUD | `_shared/repositories/` | ALL database operations |
+| **Service** | Business logic | `_shared/services/` | Complex multi-step operations |
+| **Server Action** | Entry point | Route `actions.ts` | User-triggered mutations |
+
+```
+User Click → Server Action → Service (if complex) → Repository → Database
+```
+
+### Decision Tree
+
+```
+"Where should this code live?"
+
+Is it a database query?
+  → _shared/repositories/[entity].repository.ts
+
+Is it complex business logic (multi-step, external services)?
+  → _shared/services/[domain].service.ts
+
+Is it a user-triggered mutation or fetch?
+  → Route's actions.ts or actions/
+
+Is it a UI component?
+  → Used by 1-2 routes? → Route's components/
+  → Used by 3+ routes? → _shared/components/
+
+Is it a type definition?
+  → Route-specific? → Route's types.ts
+  → Shared across routes? → _shared/types/
+
+Is it validation?
+  → _shared/validation/[route].schema.ts
+```
+
+## Full Pattern Examples
+
+For complete code examples of all patterns (repository, service, action, component, types/validation, anti-patterns), see `references/route-patterns.md`.
+
+## Quick Reference
+
+| What | Where | Rule |
+|------|-------|------|
+| Database queries | `_shared/repositories/` | Always |
+| Complex business logic | `_shared/services/` | 3+ steps or external services |
+| User mutations/fetches | Route `actions.ts` or `actions/` | Colocated with route |
+| Route components | Route `components/` | Default |
+| Shared components | `_shared/components/` | 3+ routes threshold |
+| Route-specific types | Route `types.ts` | Single route use |
+| Shared types | `_shared/types/` | Multiple route use |
+| Validation schemas | `_shared/validation/` | Always |
+
+## Checklist for New Routes
+
+- [ ] `page.tsx` - Server Component for data fetching
+- [ ] `actions.ts` or `actions/` - Server actions
+- [ ] `components/` - Route-specific components
+- [ ] `loading.tsx` - Skeleton matching UI layout
+- [ ] `error.tsx` - Error boundary using `PageErrorBoundary` from `@/app/_shared/components/PageErrorBoundary`
+- [ ] `CLAUDE.md` - Route documentation
+- [ ] Repository in `_shared/repositories/` if new entity
+- [ ] Validation schema in `_shared/validation/`
+
+## Reference
+
+For complete audit checklist: `@docs/patterns/route-audit.md`
+
+## Reference: route-patterns.md
+
+# Route Architecture — Full Pattern Examples
+
+## Pattern: Repository (Data Access)
+
+```typescript
+// ✅ CORRECT - Repository in _shared
+// app/_shared/repositories/calls.repository.ts
+export async function list(supabase: SupabaseClient) {
+  const { data, error } = await supabase
+    .from('calls')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+
+// Usage in server action
+import { callsRepository } from '@/app/_shared/repositories/calls.repository';
+
+export async function getCalls() {
+  const supabase = await createClient();
+  return callsRepository.list(supabase);
+}
+```
+
+**Rules:**
+- Always `select *` (never pick columns)
+- Accept `SupabaseClient` as first parameter
+- Use Supabase-generated types
+- One repository per entity
+
+## Pattern: Service (Business Logic)
+
+```typescript
+// ✅ CORRECT - Service for complex operation
+// app/_shared/services/booking.service.ts
+export async function createBookingWithNotification(
+  supabase: SupabaseClient,
+  data: CreateBookingInput
+) {
+  // Step 1: Create booking in database
+  const booking = await bookingRepository.create(supabase, data);
+
+  // Step 2: Create calendar event in Nylas
+  await nylasService.createEvent(booking);
+
+  // Step 3: Send confirmation email
+  await emailService.sendBookingConfirmation(booking);
+
+  return booking;
+}
+```
+
+**When to create a service:**
+- Operation involves 3+ steps
+- Operation touches external services (Nylas, Stripe, etc.)
+- Logic is reused across multiple actions
+- Logic is too complex for inline action code
+
+**When NOT to create a service:**
+- Simple CRUD → Use repository directly
+- Single-step operation → Inline in action
+
+## Pattern: Server Actions
+
+### Simple Route (1-2 actions)
+
+```
+route/
+├── actions.ts           # Single file
+└── page.tsx
+```
+
+```typescript
+// actions.ts
+'use server';
+
+export async function createItem(input: CreateInput) {
+  const supabase = await createClient();
+  const result = await itemsRepository.create(supabase, input);
+  revalidatePath('/items');
+  return { success: true, data: result };
+}
+```
+
+### Complex Route (3+ actions)
+
+```
+route/
+├── actions/             # Folder with one file per action
+│   ├── create-item.ts
+│   ├── delete-item.ts
+│   ├── update-item.ts
+│   └── get-item-details.ts
+└── page.tsx
+```
+
+## Pattern: Types and Validation
+
+```typescript
+// Route-specific types stay with route
+// app/(protected)/dashboard/types.ts
+export interface DashboardData {
+  kpis: KpiMetrics;
+  charts: ChartData;
+}
+
+// Shared types go to _shared
+// app/_shared/types/calls.types.ts
+export type CallRecord = Database['public']['Tables']['calls']['Row'];
+
+// Validation schemas always in _shared
+// app/_shared/validation/calls.schema.ts
+import { z } from 'zod';
+
+export const createCallSchema = z.object({
+  leadId: z.string().uuid(),
+  scheduledAt: z.date(),
+  notes: z.string().optional(),
+});
+```
+
+## Anti-Patterns
+
+```typescript
+// ❌ WRONG - Direct Supabase in action (use repository)
+export async function createCall(data: CreateCallInput) {
+  const supabase = await createClient();
+  await supabase.from('calls').insert(data);  // Use repository!
+}
+
+// ❌ WRONG - Cross-route import
+import { UserCard } from '../users/components/UserCard';  // FORBIDDEN
+
+// ❌ WRONG - Business logic in action (use service)
+export async function processPayment(paymentId: string) {
+  // 50 lines of complex logic with external API calls...
+  // This should be a service!
+}
+
+// ❌ WRONG - Types inline (use _shared/types or route types.ts)
+interface CallData {  // Should use Database types!
+  id: string;
+  name: string;
+}
+```

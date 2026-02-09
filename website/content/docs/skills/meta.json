@@ -1,0 +1,26 @@
+{
+  "title": "Skills",
+  "pages": [
+    "ci-pipeline",
+    "component-creation",
+    "cross-editor-compatibility",
+    "data-fetching",
+    "database-migration",
+    "detail-view-pattern",
+    "documentation",
+    "graphql-api-design",
+    "linear-ticket",
+    "observability-logging",
+    "performance-patterns",
+    "pull-request",
+    "repository-pattern",
+    "route-architecture",
+    "security-patterns",
+    "server-action",
+    "solid-webhook-patterns",
+    "testing-patterns",
+    "timezone-handling",
+    "triage",
+    "webhook-observability"
+  ]
+}

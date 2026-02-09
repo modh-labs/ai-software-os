@@ -1,0 +1,433 @@
+---
+title: "Testing Standards"
+description: "Testing standards for all apps in the monorepo."
+---
+# Testing Standards
+
+> **Applies to:** All apps in the monorepo (web, admin, future apps)
+> **Last Updated:** January 2026
+
+This document defines testing standards for all applications in your monorepo. Every app MUST follow these patterns for consistent, reliable test coverage.
+
+---
+
+## Test Stack
+
+| Tool | Purpose | Location |
+|------|---------|----------|
+| **Vitest** | Unit & Integration tests | `__tests__/*.test.ts` |
+| **Playwright** | End-to-end tests | `e2e/*.e2e.test.ts` |
+| **Biome** | Linting & formatting | Pre-commit hook |
+
+---
+
+## Commands
+
+### Unit & Integration (Vitest)
+
+```bash
+pnpm test           # Watch mode (re-run on changes)
+pnpm test:ci        # Single run (CI mode)
+pnpm test:coverage  # Generate coverage report
+```
+
+### End-to-End (Playwright)
+
+```bash
+pnpm test:e2e       # Headed mode (see browser)
+pnpm test:e2e:ui    # Interactive UI
+pnpm test:e2e:debug # Step-through debugger
+```
+
+### Quality Checks
+
+```bash
+pnpm ci             # Full pipeline (lint + typecheck + tests)
+pnpm fix            # Auto-fix lint/format issues
+pnpm typecheck      # TypeScript type checking
+```
+
+---
+
+## Test Organization
+
+### `__tests__` Directory Pattern
+
+Tests live in `__tests__` directories next to the code they test:
+
+```
+app/(protected)/calls/actions/
+├── cancel-reschedule-call.ts       # Source file
+└── __tests__/
+    ├── cancel-flow.test.ts          # Test file
+    └── reschedule-flow.test.ts      # Test file
+
+app/_shared/lib/email/
+├── service.ts                        # Source file
+└── __tests__/
+    └── service.test.ts               # Test file
+```
+
+### Why `__tests__` Directories
+
+- Vitest module mocking works reliably
+- Clear separation between source and test code
+- Standard JavaScript/TypeScript convention
+- Easy to exclude from production builds
+
+### Naming Convention
+
+| Type | Pattern | Example |
+|------|---------|---------|
+| Unit tests | `*.test.ts` | `calls.repository.test.ts` |
+| Integration tests | `*-integration.test.ts` | `payment-flow-integration.test.ts` |
+| E2E tests | `*.e2e.test.ts` | `checkout.e2e.test.ts` |
+
+---
+
+## Unit Test Patterns
+
+### Repository Tests
+
+```typescript
+// __tests__/calls.repository.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createCall, listCalls } from '../calls.repository';
+
+describe('calls.repository', () => {
+  const mockSupabase = {
+    from: vi.fn(() => ({
+      insert: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: mockCall, error: null }),
+    })),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('creates a call with provided data', async () => {
+    const result = await createCall(mockSupabase as any, {
+      title: 'Test Call',
+      lead_id: 'lead-123',
+    });
+
+    expect(result).toEqual(mockCall);
+    expect(mockSupabase.from).toHaveBeenCalledWith('calls');
+  });
+
+  it('throws on database error', async () => {
+    mockSupabase.from.mockReturnValueOnce({
+      insert: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: null, error: new Error('DB Error') }),
+    });
+
+    await expect(createCall(mockSupabase as any, {})).rejects.toThrow('DB Error');
+  });
+});
+```
+
+### Server Action Tests
+
+```typescript
+// __tests__/create-call.test.ts
+import { describe, it, expect, vi } from 'vitest';
+import { createCallAction } from '../create-call';
+
+// Mock dependencies
+vi.mock('@/app/_shared/repositories/calls.repository', () => ({
+  createCall: vi.fn().mockResolvedValue({ id: 'call-123', title: 'Test' }),
+}));
+
+vi.mock('next/cache', () => ({
+  revalidatePath: vi.fn(),
+}));
+
+describe('createCallAction', () => {
+  it('returns success with created call', async () => {
+    const result = await createCallAction({
+      title: 'Test Call',
+      lead_id: 'lead-123',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data.id).toBe('call-123');
+  });
+
+  it('returns error on failure', async () => {
+    const { createCall } = await import('@/app/_shared/repositories/calls.repository');
+    vi.mocked(createCall).mockRejectedValueOnce(new Error('Failed'));
+
+    const result = await createCallAction({ title: 'Test' });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Failed');
+  });
+});
+```
+
+### Utility Function Tests
+
+```typescript
+// __tests__/timezone.test.ts
+import { describe, it, expect } from 'vitest';
+import { formatInTimezone, getUserTimezone } from '../timezone';
+
+describe('timezone utilities', () => {
+  it('formats date in user timezone', () => {
+    const date = new Date('2025-01-15T10:00:00Z');
+    const formatted = formatInTimezone(date, 'America/New_York');
+
+    expect(formatted).toContain('5:00 AM'); // UTC-5
+  });
+
+  it('falls back to UTC for invalid timezone', () => {
+    const date = new Date('2025-01-15T10:00:00Z');
+    const formatted = formatInTimezone(date, 'Invalid/Zone');
+
+    expect(formatted).toContain('10:00 AM');
+  });
+});
+```
+
+---
+
+## Integration Test Patterns
+
+### Multi-Module Flow
+
+```typescript
+// __tests__/payment-flow-integration.test.ts
+import { describe, it, expect, vi } from 'vitest';
+import { processPayment } from '../payment-processor';
+import { updateLeadPaymentStats } from '../lead-stats';
+
+describe('Payment Flow Integration', () => {
+  it('processes payment and updates lead stats', async () => {
+    // Setup: Create test data
+    const paymentData = { amount: 5000, leadId: 'lead-123' };
+
+    // Execute: Run the full flow
+    const payment = await processPayment(paymentData);
+    const lead = await updateLeadPaymentStats(paymentData.leadId, payment);
+
+    // Verify: Check end state
+    expect(payment.status).toBe('succeeded');
+    expect(lead.total_paid_cents).toBe(5000);
+    expect(lead.payment_count).toBe(1);
+  });
+});
+```
+
+---
+
+## E2E Test Patterns
+
+### Page Navigation
+
+```typescript
+// e2e/calls.e2e.test.ts
+import { test, expect } from '@playwright/test';
+
+test.describe('Calls Page', () => {
+  test.beforeEach(async ({ page }) => {
+    // Login and navigate
+    await page.goto('/calls');
+    await expect(page.getByRole('heading', { name: 'Calls' })).toBeVisible();
+  });
+
+  test('displays call list', async ({ page }) => {
+    await expect(page.getByTestId('call-list')).toBeVisible();
+    await expect(page.getByRole('row')).toHaveCount(greaterThan(0));
+  });
+
+  test('opens call detail sheet', async ({ page }) => {
+    await page.getByRole('row').first().click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await expect(page.getByText('Call Details')).toBeVisible();
+  });
+});
+```
+
+### Form Submission
+
+```typescript
+test('creates new call', async ({ page }) => {
+  await page.getByRole('button', { name: 'New Call' }).click();
+
+  // Fill form
+  await page.getByLabel('Title').fill('Test Call');
+  await page.getByLabel('Lead').selectOption('lead-123');
+  await page.getByLabel('Date').fill('2025-02-01');
+
+  // Submit
+  await page.getByRole('button', { name: 'Create' }).click();
+
+  // Verify
+  await expect(page.getByText('Call created')).toBeVisible();
+  await expect(page.getByText('Test Call')).toBeVisible();
+});
+```
+
+---
+
+## Mocking Strategies
+
+### External Services
+
+```typescript
+// Mock Stripe
+vi.mock('@/app/_shared/lib/stripe', () => ({
+  stripe: {
+    charges: {
+      create: vi.fn().mockResolvedValue({ id: 'ch_123', status: 'succeeded' }),
+    },
+  },
+}));
+
+// Mock Clerk
+vi.mock('@clerk/nextjs/server', () => ({
+  auth: vi.fn().mockResolvedValue({ userId: 'user_123', orgId: 'org_123' }),
+}));
+
+// Mock Supabase
+vi.mock('@/app/_shared/lib/supabase/server', () => ({
+  createClient: vi.fn().mockReturnValue(mockSupabase),
+}));
+```
+
+### Time and Dates
+
+```typescript
+import { vi, beforeEach, afterEach } from 'vitest';
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2025-01-15T10:00:00Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+```
+
+---
+
+## Coverage Requirements
+
+### Minimum Thresholds
+
+```typescript
+// vitest.config.ts
+export default defineConfig({
+  test: {
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html'],
+      thresholds: {
+        statements: 70,
+        branches: 60,
+        functions: 70,
+        lines: 70,
+      },
+      exclude: [
+        '**/*.d.ts',
+        '**/__tests__/**',
+        '**/types/**',
+      ],
+    },
+  },
+});
+```
+
+### Priority Coverage Areas
+
+| Area | Target | Why |
+|------|--------|-----|
+| Repositories | 90%+ | Data integrity |
+| Server Actions | 80%+ | Business logic |
+| Utilities | 90%+ | Shared functionality |
+| Components | 60%+ | UI logic |
+| Webhooks | 95%+ | External integration |
+
+---
+
+## Test Data Management
+
+### Factories
+
+```typescript
+// __tests__/factories/call.factory.ts
+import type { Call } from '@/app/_shared/types/calls';
+
+export function createMockCall(overrides?: Partial<Call>): Call {
+  return {
+    id: 'call-123',
+    title: 'Test Call',
+    status: 'scheduled',
+    lead_id: 'lead-123',
+    organization_id: 'org-123',
+    created_at: new Date().toISOString(),
+    ...overrides,
+  };
+}
+```
+
+### Usage
+
+```typescript
+import { createMockCall } from './__tests__/factories/call.factory';
+
+const scheduledCall = createMockCall({ status: 'scheduled' });
+const completedCall = createMockCall({ status: 'completed' });
+```
+
+---
+
+## CI Integration
+
+### GitHub Actions
+
+```yaml
+# .github/workflows/ci.yml
+test:
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - uses: pnpm/action-setup@v3
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+
+    - run: pnpm install --frozen-lockfile
+    - run: pnpm test:ci
+    - run: pnpm test:e2e
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v4
+```
+
+---
+
+## Checklist for New Features
+
+- [ ] Unit tests for repository functions
+- [ ] Unit tests for server actions
+- [ ] Unit tests for utility functions
+- [ ] Integration tests for multi-module flows
+- [ ] E2E tests for critical user paths
+- [ ] Mocks for external services (Stripe, Clerk, etc.)
+- [ ] Test factories for entity data
+- [ ] Coverage meets thresholds
+
+---
+
+## Related Documentation
+
+- [Testing Patterns](../patterns/testing.md) - Detailed patterns
+- [CI/CD Testing](../testing/CI_CD_TESTING.md) - Pipeline configuration
+- [Playwright Best Practices](../testing/PLAYWRIGHT_BEST_PRACTICES.md) - E2E patterns
+- [Mocking Strategy](../testing/MOCKING_STRATEGY.md) - Mock patterns

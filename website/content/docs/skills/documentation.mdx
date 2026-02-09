@@ -1,0 +1,172 @@
+---
+title: "Documentation"
+description: "Guide documentation creation and placement across your codebase. Use when adding new features, patterns, runbooks, integrations, or any work that should be documented. Ensures the right docs are created in the right places and keeps the two-layer system (human docs + Claude skills) in sync."
+---
+
+# Documentation Skill
+
+## When This Skill Activates
+
+This skill automatically activates when you:
+- Create a new feature, route, or integration
+- Add or modify engineering patterns
+- Build something that other developers will need to understand
+- Create or update runbooks for operational systems
+- Are asked to document something
+
+## Two-Layer Documentation System
+
+Your project has two complementary documentation layers:
+
+| Layer | Location | Audience | Purpose |
+|-------|----------|----------|---------|
+| **Human docs** | `docs/` | Developers reading & learning | Explains *how* and *why* — patterns, runbooks, standards, user journeys |
+| **Claude skills** | `.claude/skills/` | Claude Code (AI agent) | Enforces *rules* mechanically — MUST/NEVER directives with code examples |
+
+These layers often cover the same topic but serve different consumers. When you add a new pattern, consider whether BOTH need updating.
+
+## Where to Put Documentation
+
+### `docs/patterns/` — Engineering Patterns
+
+**When:** You've established a reusable approach for building something.
+
+**Examples:** Repository pattern, server actions, data fetching, webhook handling, component conventions.
+
+**Format:**
+- Title + one-line summary
+- When to use this pattern
+- How it works (with code examples)
+- Anti-patterns (what NOT to do)
+- Related files
+
+**Checklist:**
+- [ ] Add entry to `docs/patterns/README.md` index table
+- [ ] Add to `docs/patterns/QUICK-REFERENCE.md` if broadly applicable
+- [ ] Consider whether a matching `.claude/skills/` skill should be created or updated
+
+### `docs/runbook/` — Operational Runbooks
+
+**When:** You've built or integrated an external system that needs operational knowledge to debug and maintain.
+
+**Examples:** Nylas calendar, Stripe billing, Sentry alerting, Supabase, third-party APIs.
+
+**Structure:**
+```
+docs/runbook/<integration>/
+├── README.md              # Architecture overview + quick reference
+├── troubleshooting.md     # Common issues + diagnostic queries
+└── <topic>.md             # Deep dives (e.g., webhooks.md, grants.md)
+```
+
+**Checklist:**
+- [ ] Add entry to `docs/runbook/README.md` index table
+- [ ] Include diagnostic SQL queries where applicable
+- [ ] Include example log/error messages for searchability
+
+### `docs/cuj/` — Core User Journeys
+
+**When:** You've built an end-to-end flow that spans multiple components (booking → lead → email → pipeline).
+
+**Examples:** Booking & lead creation, payment flow, onboarding, call lifecycle.
+
+**Format:**
+- Trigger (what starts the journey)
+- Step-by-step flow with file paths
+- Data transformations at each step
+- Error handling / edge cases
+
+**Checklist:**
+- [ ] Add entry to `docs/cuj/README.md` if it exists
+- [ ] Reference from related pattern docs
+
+### `docs/standards/` — Coding Standards
+
+**When:** You're codifying a rule that applies across the entire codebase (not a specific pattern).
+
+**Examples:** Observability standards, database naming conventions, TypeScript conventions.
+
+**Checklist:**
+- [ ] Add entry to relevant index
+- [ ] Consider whether this should also be a `.claude/skills/` skill for enforcement
+
+### `docs/internal/` — Internal Guides
+
+**When:** Deployment procedures, environment setup, one-off investigations, DevOps.
+
+**Examples:** Vercel deployment, staging environment setup, migration procedures.
+
+### In-Code `AGENTS.md` Files (Cross-Editor AI Context)
+
+**When:** A directory contains enough complexity that AI tools need context when working in it.
+
+**Where:** Colocated with the code they describe. **ALWAYS create both files:**
+```
+app/(protected)/calls/AGENTS.md       # Source of truth (all content here)
+app/(protected)/calls/CLAUDE.md       # Contains only "@AGENTS.md"
+```
+
+**How:** Write content in `AGENTS.md`, then create `CLAUDE.md` with just `@AGENTS.md`. See `docs/patterns/agents-md-convention.md` for the full convention.
+
+**Format:** Brief, focused on what's unique about this directory. Not a pattern doc — just "here's what you need to know to work here."
+
+## When to Create a Matching Skill
+
+Create or update a `.claude/skills/` skill alongside human docs when:
+- The pattern has strict rules (MUST/NEVER) that Claude should enforce
+- Violations are common and caught repeatedly in code review
+- The pattern involves code generation (scaffolding, boilerplate)
+
+Do NOT create a skill when:
+- The doc is purely informational (architecture overview, runbook)
+- The topic is too broad to enforce mechanically
+- It's a one-off guide (deployment steps, investigation notes)
+
+## AI Discoverability (llms.txt)
+
+Public-facing product docs live in a separate system:
+
+| File | Path | Purpose |
+|------|------|---------|
+| `llms.txt` | `apps/web/public/llms.txt` | ~500-word product summary for AI models |
+| `llms-full.txt` | `apps/web/public/llms-full.txt` | ~2000-word detailed product overview |
+| Feature Index | `docs/marketing/ai-seo/feature-index.md` | Tracks which features are covered |
+| Content Strategy | `docs/patterns/seo-and-tracking.md` | Keyword targets and content guidelines |
+| Pipeline README | `docs/marketing/ai-seo/README.md` | Full update workflow |
+
+These are NOT engineering docs. They describe *what your application does* for external AI consumption (Claude, ChatGPT, Perplexity).
+
+**When a user-facing feature ships, ALWAYS prompt the developer to:**
+1. Add the feature to `docs/marketing/ai-seo/feature-index.md`
+2. Update `apps/web/public/llms.txt` (concise bullet)
+3. Update `apps/web/public/llms-full.txt` (full section + FAQ if applicable)
+4. Add competitor replacement framing where relevant
+5. Verify keyword density targets are still met
+
+## Cross-Editor Compatibility (Claude Code + Cursor)
+
+Project AI configuration works across both editors without duplication:
+
+| Config | Location | Claude Code | Cursor |
+|--------|----------|-------------|--------|
+| Core rules | `AGENTS.md` (source of truth) | Via `@AGENTS.md` in CLAUDE.md | Native |
+| Import pointer | `CLAUDE.md` (contains `@AGENTS.md`) | Native | N/A |
+| Skills | `.claude/skills/*/SKILL.md` | Native | Native (toggle in Settings > Rules) |
+| Cursor-only | `.cursor/rules/*.mdc` | N/A | Native |
+
+**Rules:**
+- Always edit `AGENTS.md` for project rules — `CLAUDE.md` only contains `@AGENTS.md`
+- Skills in `.claude/skills/` work in both editors — no need to duplicate into `.cursor/rules/`
+- Use `.cursor/rules/*.mdc` ONLY for Cursor-specific behavior that doesn't apply to Claude Code
+
+## New Feature Documentation Checklist
+
+When building a significant new feature, create documentation in this order:
+
+1. **In-code `AGENTS.md` + `CLAUDE.md`** — immediate context for the route/directory (write content in AGENTS.md, create CLAUDE.md with `@AGENTS.md`)
+2. **Pattern doc** (`docs/patterns/`) — if the feature introduces a reusable pattern
+3. **CUJ doc** (`docs/cuj/`) — if the feature is a multi-step user journey
+4. **Runbook** (`docs/runbook/`) — if the feature integrates an external system
+5. **Skill** (`.claude/skills/`) — if the pattern has strict enforceable rules
+6. **AI SEO** — if user-facing, update `docs/marketing/ai-seo/feature-index.md` + `llms.txt` + `llms-full.txt`
+7. **Update indexes** — add entries to relevant README.md files

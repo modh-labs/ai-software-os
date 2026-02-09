@@ -1,0 +1,250 @@
+---
+title: "Distributed Rate Limiting with Redis"
+description: "Serverless Redis service optimized for Vercel and Edge environments."
+---
+# Upstash Redis (Vercel KV)
+
+## What Is It?
+
+Upstash is a **serverless Redis** service optimized for Vercel and Edge environments. Unlike traditional Redis that requires persistent TCP connections, Upstash uses HTTP/REST APIs, making it perfect for serverless functions that spin up and down.
+
+## Why We Use It
+
+### The Problem
+Serverless functions on Vercel are ephemeral - each request might hit a different instance. This breaks:
+- **Rate limiting**: In-memory counters reset when a new instance spins up
+- **Circuit breakers**: One instance doesn't know if another detected failures
+- **Session state**: User state is lost between requests
+
+### The Solution
+Upstash provides a shared Redis instance that all serverless function instances can read/write to, giving us distributed state coordination.
+
+## Current Use Cases in your application
+
+### 1. Distributed Rate Limiting (`rate-limit.ts`)
+**Problem**: Attackers can bypass in-memory rate limits by hitting different serverless instances.
+**Solution**: Store rate limit counters in Redis so all instances see the same count.
+
+```typescript
+import { checkRateLimit, RATE_LIMITS } from "@/app/_shared/lib/rate-limit";
+
+// In a server action or API route
+const result = await checkRateLimit(clientIp, "booking", RATE_LIMITS.booking);
+if (!result.success) {
+  return Response.json({ error: "Too many requests" }, { status: 429 });
+}
+```
+
+### 2. Circuit Breaker Pattern (`circuit-breaker.ts`)
+**Problem**: If Nylas or Stripe goes down, all instances keep hammering the failing API.
+**Solution**: Share circuit state in Redis - when one instance detects 5 failures, all instances stop trying.
+
+```typescript
+import { withCircuitBreaker } from "@/app/_shared/lib/circuit-breaker";
+
+// Wrap external API calls
+const calendar = await withCircuitBreaker("nylas", async () => {
+  return await nylasClient.calendars.list({ grantId });
+});
+// If Nylas is down, this throws immediately instead of waiting for timeout
+```
+
+### 3. Health Checks (`/api/health/ready`)
+Redis connectivity is monitored as part of readiness checks.
+
+## Future Use Cases
+
+These are patterns you can implement using Upstash when the need arises:
+
+### Caching (Fast Data Access)
+```typescript
+import { Redis } from "@upstash/redis";
+
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL!,
+  token: process.env.KV_REST_API_TOKEN!,
+});
+
+// Cache expensive computation
+async function getOrganizationStats(orgId: string) {
+  const cacheKey = `org-stats:${orgId}`;
+
+  // Try cache first
+  const cached = await redis.get<OrgStats>(cacheKey);
+  if (cached) return cached;
+
+  // Compute expensive stats
+  const stats = await computeExpensiveStats(orgId);
+
+  // Cache for 5 minutes
+  await redis.set(cacheKey, stats, { ex: 300 });
+
+  return stats;
+}
+```
+
+### Session Storage
+```typescript
+// Store user session data that needs to persist across requests
+await redis.set(`session:${userId}`, {
+  lastActive: Date.now(),
+  preferences: userPreferences,
+  draft: unsavedFormData,
+}, { ex: 3600 }); // 1 hour TTL
+```
+
+### Pub/Sub for Real-Time Features
+```typescript
+// Trigger across instances when data changes
+await redis.publish("lead-updated", JSON.stringify({ leadId, changes }));
+```
+
+### Distributed Locks
+```typescript
+// Prevent duplicate processing of webhooks
+const lockKey = `lock:webhook:${eventId}`;
+const acquired = await redis.set(lockKey, "1", { nx: true, ex: 30 });
+
+if (!acquired) {
+  // Another instance is already processing this
+  return;
+}
+
+try {
+  await processWebhook(event);
+} finally {
+  await redis.del(lockKey);
+}
+```
+
+### Feature Flags
+```typescript
+// Quick feature toggles without redeploy
+const features = await redis.hgetall<Record<string, boolean>>("features");
+if (features?.newBookingFlow) {
+  // Show new UI
+}
+```
+
+### Queue for Background Jobs
+```typescript
+// Simple job queue (for lightweight needs - use Inngest for complex workflows)
+await redis.lpush("email-queue", JSON.stringify({ to, subject, body }));
+
+// Worker processes from the queue
+const job = await redis.rpop("email-queue");
+```
+
+## Environment Variables
+
+Vercel's Upstash integration automatically injects these:
+
+| Variable | Description |
+|----------|-------------|
+| `KV_REST_API_URL` | REST API endpoint (primary) |
+| `KV_REST_API_TOKEN` | Authentication token |
+| `KV_REST_API_READ_ONLY_TOKEN` | Read-only token for safety |
+| `KV_URL` | Redis connection URL (for non-REST clients) |
+| `REDIS_URL` | Standard Redis URL alias |
+
+Our code supports both Vercel naming (`KV_*`) and standard Upstash naming (`UPSTASH_*`) for flexibility.
+
+## Best Practices
+
+### 1. Always Set TTLs
+```typescript
+// ✅ Good - data expires automatically
+await redis.set("cache:data", value, { ex: 300 });
+
+// ❌ Bad - data stays forever, fills up storage
+await redis.set("cache:data", value);
+```
+
+### 2. Use Prefixes for Organization
+```typescript
+const PREFIXES = {
+  rateLimit: "rl:",
+  circuit: "cb:",
+  cache: "cache:",
+  session: "session:",
+  lock: "lock:",
+};
+
+await redis.set(`${PREFIXES.cache}org:${orgId}`, data);
+```
+
+### 3. Handle Failures Gracefully
+```typescript
+// Redis is optional - always have a fallback
+try {
+  return await redis.get(key);
+} catch (error) {
+  logger.warn("Redis unavailable, using fallback", { error });
+  return fallbackValue;
+}
+```
+
+### 4. JSON Serialization is Automatic
+```typescript
+// Upstash handles JSON automatically
+await redis.set("user", { name: "Alice", role: "admin" });
+const user = await redis.get<{ name: string; role: string }>("user");
+// user is already an object, not a string
+```
+
+## Costs & Limits
+
+Upstash free tier:
+- **10,000 commands/day** (enough for dev/staging)
+- **256 MB storage**
+
+Pro tier (for production):
+- **Pay-per-command** ($0.20 per 100K commands)
+- Unlimited storage
+- Multi-region replication
+
+## When NOT to Use Redis
+
+| Use Case | Better Alternative |
+|----------|-------------------|
+| Persistent data | Supabase (PostgreSQL) |
+| Complex workflows | Inngest |
+| File storage | Supabase Storage |
+| Full-text search | Supabase pg_search |
+| Large blob storage | Vercel Blob |
+
+Redis is for **fast, ephemeral, shared state** - not permanent data storage.
+
+## Related Files
+
+- `app/_shared/lib/circuit-breaker.ts` - Circuit breaker implementation
+- `app/_shared/lib/rate-limit.ts` - Rate limiting implementation
+- `app/api/health/ready/route.ts` - Health checks including Redis
+- `docs/patterns/sentry-debugging.md` - Monitoring integration
+
+## Quick Start
+
+```typescript
+import { Redis } from "@upstash/redis";
+
+// Get Redis client
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL!,
+  token: process.env.KV_REST_API_TOKEN!,
+});
+
+// Basic operations
+await redis.set("key", "value");
+const value = await redis.get("key");
+await redis.del("key");
+
+// With TTL (expires in 60 seconds)
+await redis.set("temp", "data", { ex: 60 });
+
+// Increment counter
+await redis.incr("page-views");
+
+// Hash (object-like)
+await redis.hset("user:123", { name: "Alice", email: "alice@example.com" });
+const user = await redis.hgetall("user:123");
+```

@@ -1,0 +1,182 @@
+---
+title: "Repository Pattern: Type-Safe Database Access"
+description: "All database operations go through repositories - one file per entity."
+---
+# Repository Pattern
+
+## Overview
+
+All database operations go through repositories - one file per entity. This ensures type safety, consistent patterns, and centralized data access logic.
+
+---
+
+## Critical Rules
+
+1. **ALL Supabase queries MUST go through repositories** - NEVER use `supabase.from()` directly in Server Actions, Server Components, or API routes
+2. **ALWAYS use Supabase-generated types** - NEVER create custom interfaces for database inserts/updates
+3. **Repository types must be derived from generated types** - No manual type definitions
+
+---
+
+## Standard Repository Pattern
+
+```typescript
+// app/_shared/repositories/calls.repository.ts
+import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Database } from '../lib/supabase/database.types';
+
+// Use generated types - no manual interfaces
+type Call = Database['public']['Tables']['calls']['Row'];
+type CallInsert = Database['public']['Tables']['calls']['Insert'];
+type CallUpdate = Database['public']['Tables']['calls']['Update'];
+
+/**
+ * List all calls with related data
+ * RLS policies automatically filter by organization_id
+ */
+export async function listCalls(
+  supabase: SupabaseClient<Database>,
+  filters?: { status?: string }
+) {
+  let query = supabase
+    .from('calls')
+    .select(`
+      *,
+      lead:leads(*),
+      closer:users(*)
+    `)
+    .order('created_at', { ascending: false });
+
+  if (filters?.status) {
+    query = query.eq('status', filters.status);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Create a new call
+ * organization_id is automatically set by RLS
+ */
+export async function createCall(
+  supabase: SupabaseClient<Database>,
+  data: CallInsert
+): Promise<Call> {
+  const { data: call, error } = await supabase
+    .from('calls')
+    .insert(data)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return call;
+}
+
+/**
+ * Update an existing call
+ * RLS ensures user can only update calls in their org
+ */
+export async function updateCall(
+  supabase: SupabaseClient<Database>,
+  id: string,
+  updates: CallUpdate
+): Promise<Call> {
+  const { data: call, error } = await supabase
+    .from('calls')
+    .update(updates)
+    .eq('id', id)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return call;
+}
+```
+
+---
+
+## Key Principles
+
+- Accept `SupabaseClient` as first parameter (allows both authenticated and service role clients)
+- Use generated `Insert`, `Update`, `Row` types from `database.types.ts`
+- Always `select *` for type safety
+- Let RLS handle organization_id filtering
+- Export individual functions, not objects (better tree-shaking)
+
+---
+
+## CRITICAL: Always Use `select *`
+
+**This is non-negotiable.** Every Supabase query must use `select *` or `select(*, relations(...))`.
+
+### Why `select *` is Required
+
+```typescript
+// DON'T DO THIS - Ever
+.select("id, title, created_at")
+.select("id, lead_id, closer_id, scheduled_at, conferencing_link")
+```
+
+Problems with column selection:
+- Missing fields cause `null` values when syncing to database
+- Need to maintain column lists when schema changes
+- Easy to forget critical fields
+- Types don't match reality
+- Causes bugs like: bookings sync without booking IDs
+
+### Correct Pattern
+
+```typescript
+// DO THIS
+.select("*")
+.select("*, lead:leads(*), closer:users(*)")
+.select("*, booking_link:call_booking_links(*)")
+```
+
+---
+
+## Type Usage
+
+```typescript
+// WRONG - Custom interface for database types
+export interface CreateBookingLinkInput {
+  title: string;
+  description?: string | null;
+  // ... manually defining all fields
+}
+
+// RIGHT - Use generated types
+import type { Database } from '@/app/_shared/lib/supabase/database.types';
+export type CreateBookingLinkInput = Database["public"]["Tables"]["call_booking_links"]["Insert"];
+```
+
+---
+
+## Usage from Server Actions
+
+```typescript
+// WRONG - Direct Supabase query in Server Action
+'use server'
+export async function createCall(data: CreateCallInput) {
+  const supabase = await createClient();
+  const { data: call, error } = await supabase
+    .from('calls')
+    .insert(data)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return call;
+}
+
+// RIGHT - Use repository
+'use server'
+import { createCall } from '@/app/_shared/repositories/calls.repository';
+
+export async function createCallAction(data: CreateCallInput) {
+  const supabase = await createClient();
+  return await createCall(supabase, data);
+}
+```

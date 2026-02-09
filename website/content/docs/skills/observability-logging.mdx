@@ -1,0 +1,754 @@
+---
+title: "Observability Logging"
+description: "Enforce structured logging, Sentry integration, and distributed tracing patterns. Use when adding logging, error tracking, Sentry tags, custom spans, metrics, or debugging production issues. Prevents console.log usage and ensures trace correlation."
+---
+
+# Observability & Logging Skill
+
+## When This Skill Activates
+
+This skill automatically activates when you:
+- Add logging to any code (server actions, repositories, webhooks)
+- Work with Sentry error tracking or performance monitoring
+- Add tracing or custom spans
+- Discuss debugging, metrics, or alerting
+- Handle errors that need to be captured
+
+## Decision Tree — "What do I use?"
+
+```
+Error in webhook handler? → logger.error() + captureWebhookException()
+Error in server action?   → logger.error() + domain-specific capture*Exception()
+Error in Inngest function? → sentryMiddleware auto-captures + logger.error()
+Error in AI agent?        → captureAIException() (or instrumentedAgentGenerate auto-captures)
+Need to track duration?   → Sentry.startSpan() or webhook logger lifecycle
+Need to filter in Sentry? → setTag() (low cardinality only)
+Need debug data?          → setContext() (not searchable)
+Need charts?              → Sentry.metrics.distribution() or .count()
+Client-side error?        → PageErrorBoundary component
+Non-critical info log?    → logger.info() (won't reach Sentry in prod)
+```
+
+## Core Rules (MUST Follow)
+
+### 1. ALWAYS Use `createModuleLogger()` — Never `console.log`
+
+```typescript
+// WRONG - Raw console
+console.log("Processing call", callId);
+
+// CORRECT - Structured logger
+import { createModuleLogger } from "@/app/_shared/lib/sentry-logger";
+const logger = createModuleLogger("calls-actions");
+
+logger.info("Processing call", { call_id: callId });
+logger.error("Payment failed", { error, payment_id: paymentId });
+```
+
+Pre-configured loggers: `authLogger`, `apiLogger`, `webhookLogger`, `aiLogger`, `schedulerLogger`, `uiLogger`, `integrationLogger`.
+
+### 2. NEVER Double-Log — `logger.error()` OR `capture*Exception()`, Not Both Internally
+
+`capture*Exception()` functions create **Sentry Issues** (alerts). They do NOT log internally.
+The caller decides whether to also log for debugging:
+
+```typescript
+// CORRECT — log for debugging, then capture for alerting
+logger.error("Booking failed at Nylas API", {
+  session_id: sessionId,
+  stage: "nylas_api",
+});
+void captureBookingException(error, { sessionId, organizationId, stage: "nylas_api" });
+
+// WRONG — capture*Exception already handles Sentry, don't add logger.error inside it
+// (This was a previous bug that caused 3-5x duplicate events)
+```
+
+**Why this matters:**
+- `logger.error()` → sends to Sentry Logs + console (Vercel Logs)
+- `capture*Exception()` → sends to Sentry Issues (alerts, fingerprinting, grouping)
+- If both are inside the capture function AND the caller also logs, you get duplicates
+
+### 3. Use Sentry Built-in OTEL — Never `@vercel/otel`
+
+Sentry SDK v10 has native OpenTelemetry. Adding `@vercel/otel` causes conflicts.
+
+Only add `@opentelemetry/api` (lightweight API package) for `trace.getActiveSpan()`.
+
+### 4. No `consoleLoggingIntegration` — Logger Handles Sentry Directly
+
+We removed `Sentry.consoleLoggingIntegration()` from all configs. Our logger sends to `Sentry.logger.*` directly. Console output is only for Vercel Logs / terminal visibility.
+
+**Do NOT re-add it.** It intercepts `console.warn/error` and re-sends them to Sentry Logs, causing duplicates with what `Sentry.logger` already sent.
+
+### 5. Tags (Searchable) vs Context (Debug) vs Metrics (Charts)
+
+```typescript
+import * as Sentry from "@sentry/nextjs";
+
+// Tags: Categorical, filterable in Sentry UI (low cardinality)
+Sentry.setTag("ai.verdict", "replace");
+Sentry.setTag("webhook.source", "stripe");
+
+// Context: Structured debugging data (NOT searchable)
+Sentry.setContext("ai_analysis_result", {
+  overallScore: 65,
+  verdict: "replace",
+  durationMs: 4500,
+});
+
+// Metrics: Numeric data for charts
+Sentry.metrics.distribution("ai.analysis.duration_ms", 4500, {
+  unit: "millisecond",
+});
+Sentry.metrics.count("webhook.processed", 1, {
+  attributes: { provider: "stripe" },
+});
+```
+
+### 6. PII Auto-Redaction
+
+The logger automatically redacts: `password`, `token`, `secret`, `apikey`, `api_key`, `accesstoken`, `access_token`, `refreshtoken`, `refresh_token`, `bearer`, `authorization`, `creditcard`, `credit_card`, `cardnumber`, `card_number`, `cvv`, `ssn`, `social_security`, `stripe_customer_id`.
+
+### 7. Production Min Level is `info`
+
+| Environment | Sentry Minimum | Console Minimum |
+|-------------|---------------|-----------------|
+| Production  | `info`        | `info`          |
+| Preview     | `debug`       | `debug`         |
+| Development | `debug`       | `debug`         |
+
+All `info`, `warn`, and `error` logs appear in Sentry Logs in production — one place to see everything. Only `debug` is filtered out (local dev noise). Use `logger.debug()` for verbose tracing you only need locally.
+
+### 8. Domain-Specific Error Capture
+
+For alertable failures (Sentry Issues, not just logs):
+
+```typescript
+import {
+  captureBookingException,   // Booking/scheduling failures
+  captureMediaException,     // Recording/transcript failures
+  capturePaymentException,   // Payment processing failures
+  captureWebhookException,   // Webhook handler failures
+  captureAIException,        // AI analysis failures
+  captureClerkException,     // Auth/user sync failures
+  captureEmailException,     // Email delivery failures
+  captureOnboardingException,// Onboarding flow failures
+  captureDeletionException,  // Entity deletion failures
+  captureNoteException,      // Note addition failures
+  captureNotetakerException, // Notetaker operation failures
+  captureGrantException,     // Nylas grant management failures
+} from "@/app/_shared/lib/sentry-logger";
+```
+
+These functions: (1) create Sentry Issues with fingerprinting, (2) set domain-specific tags.
+They do NOT log internally — the caller handles `logger.error()` separately.
+
+See `references/domain-exceptions.md` for full interfaces and stage enums.
+
+### 9. ALWAYS Propagate `tracingOptions` to Mastra Agents
+
+```typescript
+import { getTracingOptionsForMastra } from "@/app/_shared/lib/tracing/otel-context";
+
+const result = await runComprehensiveAnalysis({
+  transcript: formattedTranscript,
+  tracingOptions: getTracingOptionsForMastra(),
+});
+```
+
+### 10. Span Naming Conventions
+
+| Pattern | Example | Use For |
+|---------|---------|---------|
+| `db.*` | `db.calls.list` | Database operations |
+| `ai.*` | `ai.comprehensive-analysis` | AI/ML operations |
+| `http.*` | `http.external-api` | External HTTP calls |
+| `function.*` | `function.process-media` | Business logic |
+
+## Error Handling Patterns
+
+### Server Action / Repository Error
+
+```typescript
+try {
+  await processPayment(paymentId);
+} catch (error) {
+  logger.error("Payment processing failed", { payment_id: paymentId, error });
+  void capturePaymentException(error, {
+    organizationId,
+    stage: "payment_storage",
+    paymentIntentId,
+  });
+  return { success: false, error: "Payment failed" };
+}
+```
+
+### Webhook Error (use webhook logger)
+
+```typescript
+import { createWebhookLogger } from "@/app/_shared/lib/webhooks/webhook-logger";
+
+const wLogger = createWebhookLogger({ provider: "stripe", eventType, eventId });
+wLogger.start();
+try {
+  // ... handle webhook
+  wLogger.success();
+} catch (error) {
+  wLogger.failure(error);
+  // webhook logger's failure() already calls Sentry.captureException
+}
+```
+
+### logError() Utility
+
+```typescript
+import { logError } from "@/app/_shared/lib/sentry-logger";
+logError("Payment processing failed", error, { payment_id: paymentId });
+```
+
+## Custom Span Pattern
+
+```typescript
+import * as Sentry from "@sentry/nextjs";
+
+const result = await Sentry.startSpan(
+  { name: "function.process-media", op: "function" },
+  async (span) => {
+    const result = await processMedia(input);
+    span.setAttributes({ "custom.output_size": result.length });
+    return result;
+  }
+);
+```
+
+## Sentry Logs (`Sentry.logger.fmt`)
+
+Use the structured logger for Sentry Logs. Attribute names must be `snake_case`.
+
+```typescript
+import * as Sentry from "@sentry/nextjs";
+
+Sentry.logger.fmt("Processing call %s for org %s", [callId, orgId], {
+  call_id: callId,
+  organization_id: orgId,
+  duration_ms: elapsed,
+});
+```
+
+### `beforeSendLog` Safety Net
+
+All three Sentry configs (`server`, `edge`, `client`) have `beforeSendLog` that:
+- Drops `debug`-level logs in production
+- Drops health check noise
+- Adds `deployment_stage` attribute for environment filtering
+- Client additionally: drops `info` in production, filters third-party noise, adds `is_client: true`
+
+## Inngest Observability
+
+`@inngest/middleware-sentry` auto-tags errors with `inngest.function_name`, `inngest.event_name`, `inngest.run_id`.
+
+**Debugging:** Sentry Issue -> `inngest.run_id` tag -> Inngest Dashboard search -> view step execution.
+
+## AI Instrumentation
+
+Use `instrumentedAgentGenerate()` for Mastra agents with automatic Sentry spans and token tracking:
+
+```typescript
+import { instrumentedAgentGenerate } from "@/app/_shared/lib/mastra/sentry-instrumentation";
+
+const result = await instrumentedAgentGenerate({
+  agent, prompt, operationName: "comprehensive-analysis",
+  organizationId, callId,
+});
+// Auto-emits: ai.tokens.prompt, ai.tokens.completion, ai.duration metrics
+```
+
+For simpler tracking: `trackAIOperation()`.
+
+## Error Boundaries
+
+Every route MUST have `error.tsx` using `PageErrorBoundary`:
+
+```typescript
+"use client";
+import { PageErrorBoundary } from "@/app/_shared/components/PageErrorBoundary";
+
+export default function Error({ error, reset }: { error: Error; reset: () => void }) {
+  return <PageErrorBoundary error={error} reset={reset} title="Page" loggerModule="route-name" />;
+}
+```
+
+`global-error.tsx` handles fatal layout errors with `Sentry.captureException` at `level: "fatal"`.
+
+## Performance Thresholds
+
+| Metric | Warning | Error |
+|--------|---------|-------|
+| DB Query | >1s | >5s |
+| Server Action | >3s | >10s |
+| API Route | >2s | >8s |
+| AI Agent Call | >10s | >30s |
+
+## Anti-Patterns
+
+```
+// NEVER console.log or console.error — use logger (even in catch blocks)
+// NEVER direct Sentry.captureException — use domain capture*Exception() functions
+// NEVER @vercel/otel — use Sentry built-in OTEL
+// NEVER consoleLoggingIntegration — removed, causes duplicates
+// NEVER logger.error() inside capture*Exception() — caller handles logging
+// NEVER both logger.error() AND capture*Exception() for the same error without reason
+// NEVER high-cardinality tags (call_id, user_id) — use context instead
+// NEVER logger.info() for production alerts — use warn or capture*Exception
+// NEVER missing tracingOptions in Mastra calls — traces won't connect
+```
+
+## Sentry MCP Debugging Workflow
+
+```
+1. search_issues("is:unresolved <keyword>")     -> find the issue
+2. get_issue_details(issueId)                    -> view tags, context, stacktrace
+3. get_trace_details(traceId)                    -> view span waterfall
+```
+
+### Runbook: Production Incident
+
+1. **Alert received** -> `search_issues` with error message or tag
+2. **Identify issue** -> `get_issue_details` -> check tags (`ai.verdict`, `inngest.*`, `webhook.source`)
+3. **View trace** -> `get_trace_details` -> identify slow/failing span
+4. **Check logs** -> Search Sentry Logs by `trace_id` for full context
+5. **Inngest jobs** -> Copy `inngest.run_id` -> check Inngest Dashboard for retries/payloads
+6. **Fix** -> Deploy -> verify issue resolves in Sentry
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `app/_shared/lib/sentry-logger.ts` | Logger + all 12 capture*Exception functions |
+| `app/_shared/lib/tracing/otel-context.ts` | Trace propagation (`getTracingOptionsForMastra`) |
+| `app/_shared/lib/request-context.ts` | AsyncLocalStorage request context |
+| `app/_shared/lib/otel/context-enrichment-processor.ts` | Auto-injects user/org into spans |
+| `app/_shared/lib/sentry-sampling.ts` | Dynamic trace sampling (critical/important/low-value) |
+| `app/_shared/lib/webhooks/webhook-logger.ts` | Webhook logger lifecycle |
+| `app/_shared/lib/mastra/sentry-instrumentation.ts` | AI agent instrumentation + token tracking |
+| `app/_shared/lib/inngest/client.ts` | Inngest client + Sentry middleware |
+| `app/_shared/components/PageErrorBoundary.tsx` | Shared error boundary component |
+| `app/global-error.tsx` | Fatal error boundary (root layout) |
+| `sentry.server.config.ts` | Server Sentry config + profiling + AI providers |
+| `sentry.edge.config.ts` | Edge Sentry config + vercelAIIntegration |
+| `instrumentation-client.ts` | Client Sentry config + Session Replay |
+| `next.config.mjs` | Sentry webpack plugin (source maps, monitors) |
+
+## Detailed Documentation
+
+- Domain exception functions with full interfaces: `references/domain-exceptions.md`
+- Tracing, sampling, context enrichment, AI instrumentation: `references/tracing-patterns.md`
+
+## Reference: domain-exceptions.md
+
+# Domain-Specific Exception Capture
+
+## How It Works (Post-Dedup Fix)
+
+`capture*Exception()` functions **only** create Sentry Issues. They do NOT log internally.
+
+**Caller pattern:**
+```typescript
+// 1. Log for debugging (goes to Sentry Logs + Vercel Logs)
+logger.error("Booking failed at Nylas API", { session_id, stage: "nylas_api" });
+
+// 2. Capture for alerting (goes to Sentry Issues with fingerprinting)
+void captureBookingException(error, { sessionId, organizationId, stage: "nylas_api" });
+```
+
+**Data flow per call:**
+- `logger.error()` → `Sentry.logger.error()` (Sentry Logs) + `console.log(JSON)` (Vercel Logs)
+- `capture*Exception()` → `Sentry.captureException()` (Sentry Issues with tags + fingerprint)
+
+**Result:** Exactly 1 Sentry Log entry + 1 Sentry Issue per error. No duplicates.
+
+## All 12 Capture Functions
+
+### captureBookingException
+
+```typescript
+type BookingFailureStage =
+  | "validation" | "nylas_api" | "nylas_timeout" | "db_sync"
+  | "email" | "notetaker" | "cancel" | "reschedule" | "webhook_sync";
+
+interface BookingExceptionContext {
+  sessionId?: string;
+  organizationId: string;
+  guestEmail?: string;
+  configurationId?: string;
+  stage: BookingFailureStage;
+  metadata?: Record<string, unknown>;
+}
+```
+Tags: `booking.critical`, `booking.stage`, `booking.session_id`, `booking.organization_id`, `booking.configuration_id`
+Fingerprint: `["booking-failure", stage, organizationId]`
+
+### captureMediaException
+
+```typescript
+type MediaFailureStage =
+  | "download" | "download_timeout" | "storage_upload" | "metadata_fetch"
+  | "transcript_parse" | "transcript_download" | "thumbnail" | "translation"
+  | "all_retries_exhausted";
+
+interface MediaExceptionContext {
+  callId: string;
+  organizationId?: string;
+  stage: MediaFailureStage;
+  mediaUrl?: string;
+  metadata?: Record<string, unknown>;
+}
+```
+Tags: `media.critical`, `media.stage`, `media.call_id`, `media.organization_id`
+Fingerprint: `["media-failure", stage, organizationId?]`
+
+### capturePaymentException
+
+```typescript
+type PaymentFailureStage =
+  | "stripe_webhook" | "webhook_secret_retrieval" | "api_key_retrieval"
+  | "payment_storage" | "payment_matching" | "commission_calculation"
+  | "subscription_update" | "refund_processing" | "lead_lookup"
+  | "lead_status_update" | "auto_close";
+
+interface PaymentExceptionContext {
+  organizationId: string;
+  stage: PaymentFailureStage;
+  stripeEventId?: string;
+  stripeEventType?: string;
+  paymentIntentId?: string;
+  amount?: number;
+  metadata?: Record<string, unknown>;
+}
+```
+Tags: `payment.critical`, `payment.stage`, `payment.organization_id`, `payment.event_type`
+Fingerprint: `["payment-failure", stage, organizationId]`
+
+### captureWebhookException
+
+```typescript
+type WebhookFailureStage =
+  | "signature_verification" | "payload_parse" | "handler_execution"
+  | "db_sync" | "side_effect" | "grant_cleanup" | "audit_log" | "event_emission";
+
+interface WebhookExceptionContext {
+  source: "nylas" | "stripe" | "clerk" | "zapier" | "other";
+  eventType: string;
+  eventId?: string;
+  organizationId?: string;
+  stage: WebhookFailureStage;
+  metadata?: Record<string, unknown>;
+}
+```
+Tags: `webhook.critical`, `webhook.source`, `webhook.event_type`, `webhook.stage`, `webhook.organization_id`
+Fingerprint: `["webhook-failure", source, stage, organizationId]`
+
+### captureAIException
+
+```typescript
+type AIFailureStage =
+  | "transcript_analysis" | "outcome_determination" | "sales_scoring"
+  | "objection_detection" | "language_detection" | "translation"
+  | "summary_generation";
+
+interface AIExceptionContext {
+  callId: string;
+  organizationId: string;
+  stage: AIFailureStage;
+  model?: string;
+  metadata?: Record<string, unknown>;
+}
+```
+Tags: `ai.critical`, `ai.stage`, `ai.call_id`, `ai.organization_id`, `ai.model`
+Fingerprint: `["ai-failure", stage, organizationId]`
+
+### captureClerkException
+
+```typescript
+type ClerkFailureStage =
+  | "user_created" | "user_updated" | "user_deleted"
+  | "org_created" | "org_updated" | "org_deleted"
+  | "membership_created" | "membership_updated" | "membership_deleted"
+  | "invitation_created" | "invitation_accepted"
+  | "stripe_seat_sync" | "billing_check";
+
+interface ClerkExceptionContext {
+  clerkUserId?: string;
+  clerkOrgId?: string;
+  eventType: string;
+  stage: ClerkFailureStage;
+  metadata?: Record<string, unknown>;
+}
+```
+Tags: `clerk.critical`, `clerk.stage`, `clerk.event_type`, `clerk.user_id`, `clerk.org_id`
+Fingerprint: `["clerk-failure", stage, clerkOrgId]`
+
+### captureEmailException
+
+```typescript
+type EmailFailureStage =
+  | "booking_confirmation" | "booking_cancellation" | "booking_reschedule"
+  | "participant_notification" | "reminder" | "ics_generation" | "resend_api";
+
+interface EmailExceptionContext {
+  organizationId: string;
+  recipientEmail?: string;
+  emailType: EmailFailureStage;
+  callId?: string;
+  metadata?: Record<string, unknown>;
+}
+```
+Tags: `email.critical`, `email.type`, `email.organization_id`
+Fingerprint: `["email-failure", emailType, organizationId]`
+
+### captureOnboardingException
+
+```typescript
+type OnboardingFailureStage =
+  | "grant_validation" | "user_upsert" | "connection_save"
+  | "invitation_user_upsert" | "invitation_member_creation" | "calendar_connection";
+
+interface OnboardingExceptionContext {
+  user_id?: string;
+  organization_id?: string;
+  stage: OnboardingFailureStage;
+  metadata?: Record<string, unknown>;
+}
+```
+Tags: `onboarding.critical`, `onboarding.stage`, `onboarding.user_id`, `onboarding.organization_id`
+Fingerprint: `["onboarding-failure", stage, organization_id]`
+
+### captureDeletionException
+
+```typescript
+type DeletionFailureStage = "fetch" | "cancel_booking" | "database_delete" | "audit_log";
+
+interface DeletionExceptionContext {
+  entity_type: "call" | "lead";
+  entity_id: string;
+  organization_id: string;
+  stage: DeletionFailureStage;
+  metadata?: Record<string, unknown>;
+}
+```
+Tags: `deletion.critical`, `deletion.entity_type`, `deletion.stage`, `deletion.organization_id`
+Fingerprint: `["deletion-failure", entity_type, stage, organization_id]`
+
+### captureNoteException
+
+```typescript
+type NoteFailureStage = "fetch_user" | "fetch_lead" | "create_note" | "update_database" | "audit_log";
+
+interface NoteExceptionContext {
+  lead_id: string;
+  organization_id: string;
+  user_id: string;
+  stage: NoteFailureStage;
+  metadata?: Record<string, unknown>;
+}
+```
+Tags: `note.critical`, `note.stage`, `note.lead_id`, `note.organization_id`, `note.user_id`
+Fingerprint: `["note-failure", stage, organization_id]`
+
+### captureNotetakerException
+
+```typescript
+type NotetakerFailureStage =
+  | "join_meeting" | "entry_denied" | "no_response" | "bad_meeting_code"
+  | "internal_error" | "media_download" | "media_upload";
+
+interface NotetakerExceptionContext {
+  call_id: string;
+  notetaker_id?: string;
+  organization_id: string;
+  meeting_state?: string;
+  failure_reason?: string;
+  stage: NotetakerFailureStage;
+  metadata?: Record<string, unknown>;
+}
+```
+Tags: `notetaker.critical`, `notetaker.failure_type`, `notetaker.call_id`, `notetaker.organization_id`, `notetaker.notetaker_id`, `notetaker.meeting_state`
+Fingerprint: `["notetaker-failure", meeting_state || stage, organization_id]`
+
+### captureGrantException
+
+```typescript
+type GrantFailureStage =
+  | "creation" | "validation" | "user_upsert" | "connection_save"
+  | "refresh" | "expiration_cleanup" | "deletion";
+
+interface GrantExceptionContext {
+  organizationId?: string;
+  userId?: string;
+  grantId?: string;
+  stage: GrantFailureStage;
+  metadata?: Record<string, unknown>;
+}
+```
+Tags: `grant.critical`, `grant.stage`, `grant.organization_id`, `grant.user_id`
+Fingerprint: `["grant-failure", stage, organizationId]`
+
+## Sentry Metrics Patterns
+
+```typescript
+// Distribution: Track ranges
+Sentry.metrics.distribution("ai.analysis.overall_score", 65, {
+  unit: "none",
+  attributes: { verdict: "replace", source: "notetaker" },
+});
+
+// Count: Track occurrences
+Sentry.metrics.count("notetaker.media.completed", 1, {
+  attributes: { has_recording: "true", has_transcript: "true" },
+});
+```
+
+## Reference: tracing-patterns.md
+
+# Tracing Patterns
+
+## Architecture: Sentry's Built-in OpenTelemetry
+
+We use Sentry SDK v10's native OpenTelemetry support. Do NOT add `@vercel/otel`.
+
+Only dependency: `@opentelemetry/api` (lightweight ~50KB API package).
+
+## Trace Context Utilities
+
+```typescript
+import {
+  getTracingOptionsForMastra,  // For Mastra agent calls
+  getCurrentTraceId,           // For manual log correlation
+  getCurrentSpanId,            // For span-level correlation
+  getSpanContext,              // Full OTEL context (advanced)
+} from "@/app/_shared/lib/tracing/otel-context";
+```
+
+## Propagating to Mastra Agents
+
+```typescript
+const result = await runComprehensiveAnalysis({
+  transcript: formattedTranscript,
+  tracingOptions: getTracingOptionsForMastra(),
+});
+```
+
+Expected trace waterfall:
+```
+[Transaction] inngest.runCallAnalysis
+  └── [Span] run-analysis (step)
+      └── [Span] ai.comprehensive-analysis
+          └── [Span] mastra.agent.generate (from tracingOptions)
+              └── [Span] openai.chat.completions
+```
+
+## Dynamic Sampling (`sentry-sampling.ts`)
+
+The `tracesSampler` function categorizes operations into tiers:
+
+**Critical paths (100% all environments):**
+Patterns: booking, payment, subscription, onboarding, notetaker, checkout, stripe, clerk
+
+**Important operations (50% prod, 100% dev):**
+Patterns: server actions, db queries, external APIs, Inngest jobs, ai operations
+
+**Low-value operations (10% prod, 50% preview, 100% dev):**
+Patterns: health checks, static assets, metrics endpoints, favicon, robots.txt
+
+**Default:** 10% prod, 50% preview, 100% dev
+
+## Context Enrichment Processor
+
+`ContextEnrichmentProcessor` (`app/_shared/lib/otel/context-enrichment-processor.ts`) auto-injects into every span:
+- `user_id`, `organization_id`, `organization_slug` (from AsyncLocalStorage)
+- `request_id`, `session_id`
+- Redis-backed distributed cache for org slugs (5-minute TTL, 1000-entry in-memory fallback)
+- Non-blocking: doesn't delay span creation on cache misses
+
+## Request Context (`request-context.ts`)
+
+Middleware populates `AsyncLocalStorage` with:
+
+```typescript
+interface RequestContext {
+  requestId: string;
+  userId?: string;
+  sessionId?: string;
+  organizationId?: string;
+  organizationRole?: string;
+  organizationSlug?: string;
+  userAgent?: string;
+  ip?: string;
+  path?: string;
+  method?: string;
+  tags: Record<string, string>;
+}
+```
+
+Access anywhere via:
+```typescript
+import { getContext, addContextTags } from "@/app/_shared/lib/request-context";
+const ctx = getContext(); // auto-injected by middleware
+addContextTags({ "custom.tag": "value" }); // adds to current request
+```
+
+## AI Instrumentation
+
+### instrumentedAgentGenerate()
+
+```typescript
+import { instrumentedAgentGenerate } from "@/app/_shared/lib/mastra/sentry-instrumentation";
+
+const result = await instrumentedAgentGenerate({
+  agent,
+  prompt,
+  operationName: "comprehensive-analysis",
+  organizationId,
+  callId,
+});
+```
+
+Auto-captures:
+- Sentry span (`ai.chat.completions`) with token counts
+- Metrics: `ai.tokens.prompt`, `ai.tokens.completion`, `ai.duration`
+- Robust JSON recovery for structured output validation errors
+- Error handling with `Sentry.captureException`
+
+### trackAIOperation()
+
+Simpler tracking without full span instrumentation — just metrics.
+
+## Auto-Injected Log Fields
+
+Every log from our logger automatically includes (via `getContextAttributes()`):
+`trace_id`, `span_id`, `user_id`, `organization_id`, `organization_slug`, `request_id`, `session_id`
+
+## Sentry Config Integration Points
+
+### Server (`sentry.server.config.ts`)
+- `nodeProfilingIntegration()` — flame graphs (10% prod, 100% dev)
+- `vercelAIIntegration({ force: true })` — AI provider tracing
+- `anthropicAIIntegration()`, `openAIIntegration()`, `googleGenAIIntegration()`
+- `ContextEnrichmentProcessor` via `openTelemetrySpanProcessors`
+
+### Edge (`sentry.edge.config.ts`)
+- `winterCGFetchIntegration()` — edge-compatible fetch tracing
+- `vercelAIIntegration({ force: true })` — `force` required because Vercel bundles break auto-detection
+
+### Client (`instrumentation-client.ts`)
+- `replayIntegration()` — session replay with privacy controls
+- `browserTracingIntegration()` — client-side performance
+- `tracePropagationTargets` — distributed tracing to same-origin + localhost + vercel.app
+
+## Troubleshooting
+
+- **Traces not connected**: Ensure `tracingOptions` is passed to Mastra
+- **trace_id missing from logs**: No active span, or using `console.log` instead of logger
+- **Logs not in Sentry**: Production filters to `warn` and above
+- **Duplicate logs**: Check that `consoleLoggingIntegration` is NOT present in configs
